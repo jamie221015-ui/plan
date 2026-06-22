@@ -1,0 +1,2430 @@
+<html lang="zh-Hant" style="background-color: transparent;"><head>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.13/html-to-image.min.js" integrity="sha512-iZ2ORl595Wx6miw+GuadDet4WQbdSWS3JLMoNfY8cRGoEFy6oT3G9IbcrBeL6AfkgpA51ETt/faX6yLV+/gFJg==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+(function() {
+// Capture host references before any artifact code runs: Window.parent
+// is [Replaceable] (a top-level `var parent` in artifact code would
+// replace the accessor with a data property), and a top-level
+// `const crypto` would shadow the global — either would otherwise
+// silently break the bridge for artifacts that worked before.
+const realParent = window.parent;
+const cryptoObj = window.crypto;
+// crypto.randomUUID exists only in Secure Contexts; fall back to a
+// unique non-crypto id elsewhere (http://LAN-IP dev flows) —
+// uniqueness is what the bridge needs, unpredictability is
+// defense-in-depth on top of the source guards.
+const newRequestId =
+cryptoObj && typeof cryptoObj.randomUUID === "function"
+? function () { return cryptoObj.randomUUID(); }
+: function () { return Date.now() + "-" + Math.random(); };
+const originalConsole = window.console;
+window.console = {
+log: (...args) => {
+originalConsole.log(...args);
+realParent.postMessage({ type: 'console', message: args.join(' ') }, '*');
+},
+error: (...args) => {
+originalConsole.error(...args);
+realParent.postMessage({ type: 'console', message: 'Error: ' + args.join(' ') }, '*');
+},
+warn: (...args) => {
+originalConsole.warn(...args);
+realParent.postMessage({ type: 'console', message: 'Warning: ' + args.join(' ') }, '*');
+}
+};
+
+// Bridge request ids are crypto-random (not sequential) so they
+// cannot be predicted by other frames in the tab.
+let callbacksMap = new Map();
+let streamControllers = new Map();
+
+window.claude = {
+complete: (prompt) => {
+return new Promise((resolve, reject) => {
+const id = newRequestId();
+callbacksMap.set(id, { resolve, reject });
+realParent.postMessage({ type: 'claudeComplete', id, prompt }, '*');
+});
+}
+};
+
+window.storage = {
+get: (key, shared = false) => {
+return new Promise((resolve, reject) => {
+const id = newRequestId();
+callbacksMap.set(id, { resolve, reject });
+realParent.postMessage({ type: 'storageGet', id, key, shared }, '*');
+});
+},
+set: (key, value, shared = false) => {
+return new Promise((resolve, reject) => {
+const id = newRequestId();
+callbacksMap.set(id, { resolve, reject });
+realParent.postMessage({ type: 'storageSet', id, key, value, shared }, '*');
+});
+},
+delete: (key, shared = false) => {
+return new Promise((resolve, reject) => {
+const id = newRequestId();
+callbacksMap.set(id, { resolve, reject });
+realParent.postMessage({ type: 'storageDelete', id, key, shared }, '*');
+});
+},
+list: (prefix, shared = false) => {
+return new Promise((resolve, reject) => {
+const id = newRequestId();
+callbacksMap.set(id, { resolve, reject });
+realParent.postMessage({ type: 'storageList', id, prefix, shared }, '*');
+});
+}
+};
+
+let pendingBlobs = new Map();
+URL.createObjectURL = (blob) => {
+// Store the blob and create an ID and URL for it
+const blobId = `blob-${Date.now()}-${Math.random()}`;
+pendingBlobs.set(blobId, blob);
+return `blob-request://${blobId}`;
+};
+
+URL.revokeObjectURL = (url) => {
+// Remove the blob from our store
+const blobId = url.replace("blob-request://", "");
+pendingBlobs.delete(blobId);
+};
+
+const getBlobFromURL = (url) => {
+const blobId = url.replace("blob-request://", "");
+return pendingBlobs.get(blobId);
+};
+
+// Override global fetch with streaming support
+window.fetch = (url, init = {}) => {
+return new Promise((resolve, reject) => {
+const id = newRequestId();
+const channelId = `fetch-${id}-${Date.now()}`;
+
+callbacksMap.set(id, { 
+resolve: (response) => {
+// Null-body statuses: Response(stream, {status: 204}) throws
+// per the Fetch spec, which would escape this resolver and
+// hang the artifact's await forever.
+if (response.status === 204 || response.status === 205 || response.status === 304) {
+try {
+resolve(new Response(null, {
+status: response.status,
+statusText: response.statusText,
+headers: response.headers
+}));
+} catch (err) {
+// Invalid statusText/header bytes can throw here too.
+reject(new TypeError(
+'Bridge fetch: unconstructable response (status ' + response.status + ')'
+));
+}
+return;
+}
+// Create a ReadableStream for the response body
+const stream = new ReadableStream({
+start(controller) {
+streamControllers.set(channelId, controller);
+},
+cancel() {
+streamControllers.delete(channelId);
+}
+});
+
+// Create and return the Response with the stream. Response()
+// requires status in [200, 599]; an opaque/no-cors fetch
+// forwards status 0, which would throw here and escape the
+// resolver, hanging the artifact's await. Surface it as a
+// network-error-shaped rejection instead.
+try {
+resolve(new Response(stream, {
+status: response.status,
+statusText: response.statusText,
+headers: response.headers
+}));
+} catch (err) {
+streamControllers.delete(channelId);
+reject(new TypeError(
+'Bridge fetch: unconstructable response (status ' + response.status + ')'
+));
+}
+},
+reject,
+channelId
+});
+
+realParent.postMessage({
+type: 'proxyFetch',
+id,
+url,
+init,
+channelId
+}, '*');
+});
+};
+
+window.addEventListener('message', async (event) => {
+// Only the embedding parent may drive the bridge — sibling and
+// nested frames can also postMessage into this window.
+if (event.source !== realParent) return;
+if (event.data.type === 'takeScreenshot') {
+// Echo the request's nonce so the requester can correlate the
+// reply to ITS request — a reply without the expected nonce
+// (e.g. from a stale pre-remount artifact) is ignored upstream.
+const screenshotNonce = event.data.nonce;
+const rootElement = document.getElementById('artifacts-component-root-html');
+if (!rootElement) {
+realParent.postMessage({
+type: 'screenshotError',
+nonce: screenshotNonce,
+error: new Error('Root element not found'),
+}, '*');
+return;
+}
+// Catch CDN load failures (htmlToImage undefined) and toPng errors
+// so the parent always gets a response instead of hanging forever.
+try {
+const screenshot = await htmlToImage.toPng(rootElement, {
+imagePlaceholder:
+"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAAXNSR0IArs4c6QAAAA1JREFUGFdjePDgwX8ACOQDoNsk0PMAAAAASUVORK5CYII=",
+});
+realParent.postMessage({
+type: 'screenshotData',
+nonce: screenshotNonce,
+data: screenshot,
+}, '*');
+} catch (err) {
+realParent.postMessage({
+type: 'screenshotError',
+nonce: screenshotNonce,
+error: err instanceof Error ? err : new Error(String(err)),
+}, '*');
+}
+} else if (event.data.type === 'claudeComplete') {
+const callback = callbacksMap.get(event.data.id);
+if (!callback) return;
+if (event.data.error) {
+callback.reject(new Error(event.data.error));
+} else {
+callback.resolve(event.data.completion);
+}
+callbacksMap.delete(event.data.id);
+} else if (event.data.type === 'proxyFetchResponse') {
+const callback = callbacksMap.get(event.data.id);
+if (!callback) return;
+if (event.data.error) {
+callback.reject(new Error(event.data.error));
+callbacksMap.delete(event.data.id);
+} else {
+// Initial response with headers, status, etc.
+callback.resolve({
+status: event.data.status,
+statusText: event.data.statusText,
+headers: event.data.headers
+});
+// Don't delete the callback yet if streaming
+if (!event.data.body) {
+callbacksMap.delete(event.data.id);
+}
+}
+} else if (event.data.type === 'proxyFetchStream') {
+// Handle streaming data chunks
+const controller = streamControllers.get(event.data.channelId);
+if (controller) {
+if (event.data.error) {
+controller.error(new Error(event.data.error));
+streamControllers.delete(event.data.channelId);
+} else if (event.data.done) {
+controller.close();
+streamControllers.delete(event.data.channelId);
+// Clean up the callback
+const callback = Array.from(callbacksMap.entries()).find(
+([_, value]) => value.channelId === event.data.channelId
+);
+if (callback) {
+callbacksMap.delete(callback[0]);
+}
+} else if (event.data.chunk) {
+controller.enqueue(new Uint8Array(event.data.chunk));
+}
+}
+} else if (event.data.type === 'storageGet') {
+const callback = callbacksMap.get(event.data.id);
+if (!callback) return;
+if (event.data.error) {
+callback.reject(new Error(event.data.error));
+} else {
+callback.resolve(event.data.result);
+}
+callbacksMap.delete(event.data.id);
+} else if (event.data.type === 'storageSet') {
+const callback = callbacksMap.get(event.data.id);
+if (!callback) return;
+if (event.data.error) {
+callback.reject(new Error(event.data.error));
+} else {
+callback.resolve(event.data.result);
+}
+callbacksMap.delete(event.data.id);
+} else if (event.data.type === 'storageDelete') {
+const callback = callbacksMap.get(event.data.id);
+if (!callback) return;
+if (event.data.error) {
+callback.reject(new Error(event.data.error));
+} else {
+callback.resolve(event.data.result);
+}
+callbacksMap.delete(event.data.id);
+} else if (event.data.type === 'storageList') {
+const callback = callbacksMap.get(event.data.id);
+if (!callback) return;
+if (event.data.error) {
+callback.reject(new Error(event.data.error));
+} else {
+callback.resolve(event.data.result);
+}
+callbacksMap.delete(event.data.id);
+}
+});
+
+window.addEventListener('click', (event) => {
+const isEl = event.target instanceof HTMLElement;
+if (!isEl) return;
+
+// find ancestor links
+const linkEl = event.target.closest("a");
+if (!linkEl || !linkEl.href) return;
+
+event.preventDefault();
+event.stopImmediatePropagation();
+
+if (linkEl.href.startsWith("blob-request:")) {
+const blob = getBlobFromURL(linkEl.href);
+if (!blob) return;
+void blob.arrayBuffer().then((data) => {
+realParent.postMessage({
+type: "downloadFile",
+filename: linkEl.download,
+data,
+mimeType: blob.type || "application/octet-stream",
+});
+});
+} else if (linkEl.href.startsWith("data:")) {
+const [header, base64Data] = linkEl.href.split(",");
+const mimeMatch = header.match(/data:([^;]+)/);
+const mimeType = mimeMatch ? mimeMatch[1] : "application/octet-stream";
+const binaryString = atob(base64Data);
+const data = Uint8Array.from(binaryString, (c) =>
+c.charCodeAt(0),
+).buffer;
+realParent.postMessage({
+type: "downloadFile",
+filename: linkEl.download,
+data,
+mimeType,
+});
+} else {
+let linkUrl;
+try {
+linkUrl = new URL(linkEl.href);
+} catch (error) {
+return;
+}
+
+if (linkUrl.hostname === window.location.hostname) return;
+
+realParent.postMessage({
+type: 'openExternal',
+href: linkEl.href,
+}, '*');
+}
+});
+
+const originalOpen = window.open;
+window.open = function (url) {
+realParent.postMessage({
+type: "openExternal",
+href: url,
+}, "*");
+};
+
+window.addEventListener('error', (event) => {
+realParent.postMessage({ type: 'console', message: 'Uncaught Error: ' + event.message }, '*');
+});
+})();
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="投資與類別">
+<meta name="theme-color" content="#F2EBE0">
+<title>投資與類別</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,500&amp;family=Inter:wght@400;500;600;700&amp;family=Roboto+Mono:wght@500;600&amp;display=swap" rel="stylesheet">
+<style>
+:root{
+--bg:#F2EBE0;
+--bg-deep:#EAE1D2;
+--card:#FFFFFF;
+--card-soft:#EFE6D8;
+--ink:#4A3D32;
+--ink-soft:#9C8E7E;
+--line:#E5DBC9;
+--rust:#8A7363;
+--rust-soft:#E3D4C4;
+--sage:#8A9385;
+--sage-soft:#DCE3D6;
+--gold:#B89968;
+--tag-pink:#E8D4D8;
+--tag-pink-ink:#9A6B72;
+--tag-blue:#D6E0E5;
+--tag-blue-ink:#5C7A87;
+--radius:20px;
+--radius-sm:14px;
+--shadow: 0 1px 2px rgba(74,61,50,0.04), 0 8px 24px -12px rgba(74,61,50,0.12);
+}
+*{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+html,body{height:100%; overflow-x:hidden;}
+body{
+margin:0;
+background:var(--bg);
+color:var(--ink);
+font-family:'Inter',-apple-system,sans-serif;
+-webkit-font-smoothing:antialiased;
+overscroll-behavior-y:none;
+}
+.serif{font-family:'Newsreader',serif;}
+.mono{font-family:'Roboto Mono',monospace; font-variant-numeric:tabular-nums;}
+
+#app{max-width:560px; width:100%; margin:0 auto; min-height:100vh; position:relative; overflow-x:hidden;}
+
+/* ===== Top bar ===== */
+.topbar{
+position:sticky; top:0; z-index:20;
+background:rgba(242,235,224,0.92);
+backdrop-filter:blur(14px);
+-webkit-backdrop-filter:blur(14px);
+padding:calc(16px + env(safe-area-inset-top)) 20px 14px;
+border-bottom:1px solid var(--line);
+}
+.topbar-row{display:flex; align-items:baseline; justify-content:space-between;}
+.topbar-eyebrow{font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--ink-soft); font-weight:600;}
+.topbar-title{font-family:'Newsreader',serif; font-size:22px; font-weight:600; margin-top:2px;}
+.topbar-date{font-size:12px; color:var(--ink-soft); font-family:'Roboto Mono',monospace;}
+
+/* ===== Screens ===== */
+.screen{display:none; padding:18px 20px calc(96px + env(safe-area-inset-bottom)); animation:fadeIn .25s ease;}
+.screen.active{display:block;}
+@keyframes fadeIn{from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);}}
+
+/* ===== Hero summary ===== */
+.hero{
+background:linear-gradient(150deg, #6B5544 0%, #7A6450 55%, #8A7360 100%);
+border-radius:24px;
+padding:26px 22px 22px;
+color:#F5EFE4;
+position:relative;
+overflow:hidden;
+margin-bottom:16px;
+}
+.hero::before{
+content:"";
+position:absolute; right:-40px; top:-40px;
+width:160px; height:160px; border-radius:50%;
+background:radial-gradient(circle, rgba(184,153,104,0.3), transparent 70%);
+}
+.hero-label{font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:#C9BBA8; font-weight:600;}
+.hero-value{font-family:'Newsreader',serif; font-size:40px; font-weight:600; margin-top:6px; letter-spacing:-0.01em;}
+.hero-sub{display:flex; gap:18px; margin-top:16px; position:relative; z-index:1;}
+.hero-sub-item{flex:1;}
+.hero-sub-label{font-size:10.5px; color:#B8AA96; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:3px;}
+.hero-sub-value{font-family:'Roboto Mono',monospace; font-size:16px; font-weight:600;}
+.pos{color:#D4A574;}
+.neg{color:#A8B8A0;}
+
+/* ===== Cards ===== */
+.card, .entry-card, .summary-card{
+background:var(--card);
+border-radius:var(--radius);
+padding:18px;
+box-shadow:var(--shadow);
+margin-bottom:14px;
+border:1px solid var(--line);
+/* prevent any content from pushing the card outside the viewport */
+max-width:100%; overflow:hidden; word-break:break-word;
+}
+/* entry-card and summary-card have their own padding defined in their own rules below */
+.card-head{display:flex; align-items:center; justify-content:space-between; margin-bottom:14px;}
+.card-title{font-family:'Newsreader',serif; font-size:17px; font-weight:600;}
+.card-title .n{font-size:11px; color:var(--ink-soft); font-weight:400; margin-left:6px;}
+
+/* ===== Pie legend ===== */
+.pie-wrap{display:flex; align-items:center; gap:18px;}
+.pie-svg{flex-shrink:0;}
+.legend{flex:1; display:flex; flex-direction:column; gap:8px;}
+.legend-row{display:flex; align-items:center; font-size:12.5px;}
+.legend-dot{width:8px; height:8px; border-radius:50%; margin-right:8px; flex-shrink:0;}
+.legend-name{flex:1; color:var(--ink);}
+.legend-pct{font-family:'Roboto Mono',monospace; color:var(--ink-soft); font-weight:600;}
+
+/* ===== Trend chart ===== */
+.trend-svg{width:100%; height:140px; display:block;}
+
+/* ===== Category list (home) — full-width rows ===== */
+.cat-list{display:flex; flex-direction:column; gap:8px; padding-bottom:4px;}
+
+/* ===== Stock name list (two-level) ===== */
+.stock-list{display:flex; flex-direction:column; gap:8px; padding-bottom:4px;}
+.stock-row{
+display:flex; align-items:center; gap:14px;
+background:var(--card); border:1px solid var(--line);
+border-radius:14px; padding:14px 16px; cursor:pointer;
+transition:transform .15s ease;
+}
+.stock-row:active{transform:scale(0.98);}
+.stock-row-ticker{
+width:44px; height:44px; border-radius:12px; flex-shrink:0;
+background:var(--card-soft); display:flex; align-items:center; justify-content:center;
+font-size:11px; font-weight:700; color:var(--ink); text-align:center;
+font-family:'Roboto Mono',monospace; letter-spacing:0; word-break:break-all; padding:2px;
+}
+.stock-row-info{flex:1; min-width:0;}
+.stock-row-name{font-size:15px; font-weight:700; color:var(--ink);}
+.stock-row-sub{font-size:11.5px; color:var(--ink-soft); margin-top:2px;}
+.stock-row-right{text-align:right; flex-shrink:0;}
+.stock-row-pl{font-family:'Roboto Mono',monospace; font-size:15px; font-weight:600;}
+.stock-row-roi{font-size:11.5px; font-family:'Roboto Mono',monospace; margin-top:2px;}
+.stock-add-row{
+display:flex; align-items:center; gap:14px;
+border:2px dashed var(--line); border-radius:14px; padding:14px 16px; cursor:pointer;
+color:var(--ink-soft); font-size:14px; font-weight:600;
+transition:border-color .15s, color .15s;
+}
+.stock-add-row:active{border-color:var(--rust); color:var(--rust);}
+.cat-row{
+display:flex; align-items:center; gap:14px;
+background:var(--card); border:1px solid var(--line);
+border-radius:14px; padding:14px 16px; cursor:pointer;
+transition:transform .15s ease;
+}
+.cat-row:active{transform:scale(0.98);}
+.cat-row-icon{
+width:36px; height:36px; border-radius:10px; flex-shrink:0;
+display:flex; align-items:center; justify-content:center; font-size:17px;
+}
+.cat-row-info{flex:1; min-width:0;}
+.cat-row-name{font-size:14px; font-weight:600; color:var(--ink);}
+.cat-row-sub{font-size:11.5px; color:var(--ink-soft); margin-top:2px; font-family:'Roboto Mono',monospace;}
+.cat-row-right{text-align:right; flex-shrink:0;}
+.cat-row-value{font-family:'Roboto Mono',monospace; font-size:15px; font-weight:600;}
+.cat-row-roi{font-size:11.5px; margin-top:2px; font-family:'Roboto Mono',monospace;}
+
+/* ===== Owner filter (home) ===== */
+.owner-filter{
+display:flex; gap:8px; margin-bottom:16px;
+}
+.owner-chip{
+flex:1; padding:11px 10px; border-radius:14px; border:1px solid var(--line);
+background:var(--card); text-align:center; cursor:pointer;
+}
+.owner-chip.active{background:var(--ink); border-color:var(--ink);}
+.owner-chip .oc-icon{font-size:16px;}
+.owner-chip .oc-label{font-size:11.5px; font-weight:600; color:var(--ink); margin-top:3px;}
+.owner-chip.active .oc-label{color:#F5EFE4;}
+
+/* ===== List screen (per category) ===== */
+.back-row{display:flex; align-items:center; gap:10px; margin-bottom:6px;}
+.back-btn{
+width:34px; height:34px; border-radius:10px;
+background:var(--card); border:1px solid var(--line);
+display:flex; align-items:center; justify-content:center;
+font-size:16px; cursor:pointer; flex-shrink:0;
+}
+.list-title-wrap{flex:1;}
+.list-title{font-family:'Newsreader',serif; font-size:21px; font-weight:600;}
+
+.summary-card{
+background:var(--card-soft); border-radius:16px; padding:16px; margin:14px 0;
+}
+.summary-row{display:flex;}
+.strip-item{flex:1; text-align:center; min-width:0;}
+.strip-item + .strip-item{border-left:1px solid var(--line);}
+.strip-label{font-size:10px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:4px;}
+.strip-value{font-family:'Roboto Mono',monospace; font-size:14px; font-weight:600;}
+
+/* ===== Entry cards ===== */
+.entry-card{
+border-radius:16px; padding:14px 16px; margin-bottom:10px;
+background:var(--card); border:1px solid var(--line);
+box-shadow:var(--shadow); max-width:100%; overflow:hidden; word-break:break-word;
+}
+.entry-tags{display:flex; flex-wrap:wrap; gap:6px;}
+.entry-name{font-size:15px; font-weight:600; margin-top:6px;}
+.entry-date{font-size:11px; color:var(--ink-soft); margin-top:2px; font-family:'Roboto Mono',monospace;}
+.entry-top{display:flex; justify-content:space-between; align-items:flex-start; gap:10px;}
+.entry-roi-badge{
+font-family:'Roboto Mono',monospace; font-size:12px; font-weight:600;
+padding:3px 9px; border-radius:20px; white-space:nowrap; flex-shrink:0;
+}
+.badge-pos{background:var(--tag-pink); color:var(--tag-pink-ink);}
+.badge-neg{background:var(--tag-blue); color:var(--tag-blue-ink);}
+.badge-zero{background:var(--card-soft); color:var(--ink-soft);}
+.status-tag{
+font-size:10px; font-weight:700; padding:2px 8px; border-radius:8px;
+text-transform:uppercase; letter-spacing:0.04em;
+}
+.status-holding{background:var(--tag-blue); color:var(--tag-blue-ink);}
+.status-sold{background:var(--ink); color:#F5EFE4;}
+.status-owner{background:var(--card-soft); color:var(--ink-soft);}
+
+.entry-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px 14px; margin-top:12px;}
+.entry-field{min-width:0;}
+.entry-field.full{grid-column:1 / -1;}
+.entry-field-label{font-size:10px; color:var(--ink-soft); text-transform:uppercase; letter-spacing:0.05em;}
+.entry-field-value{font-family:'Roboto Mono',monospace; font-size:13.5px; font-weight:600; margin-top:2px; word-break:break-word;}
+.entry-actions{display:flex; gap:8px; margin-top:12px;}
+.entry-actions button{
+flex:1; padding:8px; border-radius:10px; border:1px solid var(--line);
+background:var(--bg); font-size:12px; font-weight:600; color:var(--ink); cursor:pointer;
+}
+.entry-actions button.del{color:#A8503A; border-color:#E8C4AC;}
+
+.empty-state{
+text-align:center; padding:50px 20px; color:var(--ink-soft);
+}
+.empty-state .ico{font-size:34px; margin-bottom:10px;}
+.empty-state .t{font-size:14px; font-weight:600; color:var(--ink); margin-bottom:4px;}
+.empty-state .s{font-size:12.5px; line-height:1.5;}
+
+/* ===== FAB ===== */
+.fab{
+position:fixed; right:max(20px, calc((100vw - 560px)/2 + 20px));
+bottom:calc(92px + env(safe-area-inset-bottom));
+width:56px; height:56px; border-radius:18px;
+background:var(--ink); color:#F5EFE4;
+display:flex; align-items:center; justify-content:center;
+font-size:26px; box-shadow:0 10px 24px -8px rgba(74,61,50,0.45);
+border:none; cursor:pointer; z-index:30;
+}
+.fab:active{transform:scale(0.94);}
+
+/* ===== Bottom nav ===== */
+.bottomnav{
+position:fixed; left:0; right:0; bottom:0; z-index:25;
+max-width:560px; margin:0 auto;
+background:rgba(255,255,255,0.95);
+backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+border-top:1px solid var(--line);
+display:flex;
+padding:8px 6px calc(8px + env(safe-area-inset-bottom));
+}
+.navbtn{
+flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
+background:none; border:none; padding:6px 0; cursor:pointer; color:var(--ink-soft);
+}
+.navbtn .ic{font-size:19px;}
+.navbtn .lb{font-size:10px; font-weight:600;}
+.navbtn.active{color:var(--rust);}
+
+/* ===== Modal (entry form) ===== */
+.modal-overlay{
+position:fixed; inset:0; background:rgba(74,61,50,0.4);
+z-index:50; display:none; align-items:flex-end;
+backdrop-filter:blur(2px);
+}
+.modal-overlay.active{display:flex;}
+.modal-sheet{
+background:var(--bg); width:100%; max-width:560px; margin:0 auto;
+border-radius:24px 24px 0 0; padding:10px 20px calc(24px + env(safe-area-inset-bottom));
+max-height:88vh; overflow-y:auto;
+animation:slideUp .25s ease;
+}
+@keyframes slideUp{from{transform:translateY(30px); opacity:0;} to{transform:translateY(0); opacity:1;}}
+.sheet-handle{width:36px; height:4px; background:var(--line); border-radius:2px; margin:6px auto 14px;}
+.sheet-title{font-family:'Newsreader',serif; font-size:19px; font-weight:600; margin-bottom:16px;}
+
+/* every field is its own full-width row now -- no more cramped two-column dates */
+.field-group{margin-bottom:14px; min-width:0;}
+.field-label{font-size:11.5px; font-weight:600; color:var(--ink-soft); margin-bottom:6px; display:block;}
+.field-input{
+width:100%; padding:13px 14px; border-radius:12px; border:1px solid var(--line);
+background:var(--card); font-size:15px; font-family:'Inter',sans-serif; color:var(--ink);
+/* prevent date/month inputs from overflowing on iOS */
+box-sizing:border-box; max-width:100%; -webkit-appearance:none; appearance:none;
+}
+.field-input:focus{outline:none; border-color:var(--rust);}
+.field-select{
+appearance:none; -webkit-appearance:none;
+background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%239C8E7E' stroke-width='2.5' stroke-linecap='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+background-repeat:no-repeat;
+background-position:right 14px center;
+padding-right:40px;
+cursor:pointer;
+}
+/* extra guard: all inputs inside .field-group or .field-row never overflow */
+.field-group input, .field-row input{ max-width:100%; }
+
+/* used only for compact same-width pairs like qty+price where both labels are short */
+.field-row{display:flex; gap:10px; align-items:flex-start;}
+.field-row .field-group{flex:1; min-width:0;}
+
+.calc-hint{
+background:var(--card-soft); border-radius:12px; padding:12px 14px; margin:14px 0;
+font-size:12.5px; color:var(--ink-soft); display:flex; justify-content:space-between; gap:10px;
+}
+.calc-hint b{color:var(--ink); font-family:'Roboto Mono',monospace; white-space:nowrap;}
+.section-label{
+font-size:11px; font-weight:700; color:var(--ink-soft); text-transform:uppercase;
+letter-spacing:0.08em; margin:18px 0 10px;
+}
+.section-label:first-of-type{margin-top:4px;}
+.sell-toggle-row{
+display:flex; align-items:center; justify-content:space-between;
+background:var(--card-soft); border-radius:12px; padding:12px 14px; margin-bottom:14px;
+}
+.sell-toggle-label{font-size:13px; font-weight:600;}
+.sell-toggle-sub{font-size:11px; color:var(--ink-soft); margin-top:2px;}
+.toggle-switch{
+width:46px; height:26px; border-radius:13px; background:var(--line); position:relative; cursor:pointer; flex-shrink:0;
+}
+.toggle-switch.on{background:var(--rust);}
+.toggle-switch::after{
+content:""; position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%;
+background:#fff; transition:transform .2s ease; box-shadow:0 1px 3px rgba(0,0,0,0.2);
+}
+.toggle-switch.on::after{transform:translateX(20px);}
+.sheet-actions{display:flex; gap:10px; margin-top:6px;}
+.btn{
+flex:1; padding:14px; border-radius:14px; border:none; font-size:14.5px; font-weight:600; cursor:pointer;
+}
+.btn-primary{background:var(--ink); color:#F5EFE4;}
+.btn-secondary{background:var(--card); color:var(--ink); border:1px solid var(--line);}
+
+.chip-row{display:flex; flex-wrap:wrap; gap:8px;}
+.chip{
+padding:8px 13px; border-radius:20px; border:1px solid var(--line); background:var(--card);
+font-size:12.5px; font-weight:600; color:var(--ink-soft); cursor:pointer;
+}
+.chip.active{background:var(--ink); color:#F5EFE4; border-color:var(--ink);}
+
+/* settings */
+.settings-row{
+display:flex; justify-content:space-between; align-items:center;
+padding:14px 0; border-bottom:1px solid var(--line); gap:12px;
+}
+.settings-row:last-child{border-bottom:none;}
+.settings-label{font-size:14px; font-weight:500;}
+.settings-sub{font-size:11.5px; color:var(--ink-soft); margin-top:2px;}
+.danger-btn{
+width:100%; padding:13px; border-radius:12px; border:1px solid #E8C4AC; background:var(--card);
+color:#A8503A; font-weight:600; font-size:13.5px; cursor:pointer; margin-top:8px;
+}
+.toast{
+position:fixed; bottom:calc(150px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
+background:var(--ink); color:#F5EFE4; padding:10px 20px; border-radius:30px; font-size:13px;
+z-index:80; opacity:0; pointer-events:none; transition:opacity .25s ease, transform .25s ease;
+white-space:nowrap;
+}
+.toast.show{opacity:1; transform:translateX(-50%) translateY(-6px);}
+
+/* ===== Confirm dialog ===== */
+.confirm-overlay{
+position:fixed; inset:0; background:rgba(74,61,50,0.45); z-index:90;
+display:none; align-items:center; justify-content:center; padding:24px;
+backdrop-filter:blur(2px);
+}
+.confirm-overlay.active{display:flex;}
+.confirm-box{
+background:var(--card); border-radius:20px; padding:22px 20px; width:100%; max-width:320px;
+box-shadow:0 20px 50px -10px rgba(0,0,0,0.3);
+animation:slideUp .2s ease;
+}
+.confirm-title{font-family:'Newsreader',serif; font-size:17px; font-weight:600; margin-bottom:6px;}
+.confirm-msg{font-size:13px; color:var(--ink-soft); line-height:1.5; margin-bottom:18px;}
+.confirm-actions{display:flex; gap:10px;}
+.confirm-actions button{
+flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-weight:600; cursor:pointer;
+}
+.confirm-cancel{background:var(--bg); color:var(--ink); border:1px solid var(--line) !important;}
+.confirm-ok{background:#A8503A; color:#fff;}
+</style>
+</head>
+<body id="artifacts-component-root-html" style="background-color: transparent;">
+
+<div id="app">
+
+<div class="topbar">
+<div class="topbar-row">
+<div>
+<div class="topbar-eyebrow" id="topbarEyebrow">投資與類別</div>
+<div class="topbar-title" id="topbarTitle">設定</div>
+</div>
+<div class="topbar-date" id="topbarDate">6/22 週一</div>
+</div>
+</div>
+
+<!-- ===== HOME SCREEN ===== -->
+<div class="screen" id="screen-home">
+
+<div class="owner-filter" id="ownerFilter"><div class="owner-chip active" onclick="setOwnerFilter(null)">
+<div class="oc-icon">✦</div><div class="oc-label">全部</div>
+</div><div class="owner-chip " onclick="setOwnerFilter('me')">
+<div class="oc-icon">🐻</div><div class="oc-label">我的資產</div>
+</div><div class="owner-chip " onclick="setOwnerFilter('we')">
+<div class="oc-icon">👫</div><div class="oc-label">共同資產</div>
+</div></div>
+
+<div class="hero">
+<div class="hero-label">💰 目前總資產</div>
+<div class="hero-value mono" id="heroTotalValue">$133,100</div>
+<div class="hero-sub">
+<div class="hero-sub-item">
+<div class="hero-sub-label">總投入</div>
+<div class="hero-sub-value" id="heroInvested">$133,100</div>
+</div>
+<div class="hero-sub-item">
+<div class="hero-sub-label">總損益</div>
+<div class="hero-sub-value " id="heroPL">$0</div>
+</div>
+<div class="hero-sub-item">
+<div class="hero-sub-label">總報酬率</div>
+<div class="hero-sub-value " id="heroROI">0.0%</div>
+</div>
+</div>
+</div>
+
+<div class="card">
+<div class="card-head">
+<div class="card-title">資產占比</div>
+</div>
+<div class="pie-wrap" id="pieWrap"><svg class="pie-svg" width="120" height="120" viewBox="0 0 120 120">
+<circle cx="60" cy="60" r="52" fill="#B8714A"></circle>
+<circle cx="60" cy="60" r="30" fill="var(--card)"></circle>
+</svg><div class="legend"><div class="legend-row">
+<span class="legend-dot" style="background:#B8714A"></span>
+<span class="legend-name">股票</span>
+<span class="legend-pct">100%</span>
+</div></div></div>
+</div>
+
+<div class="card" style="padding-bottom:8px;">
+<div class="card-head">
+<div class="card-title">類別</div>
+</div>
+<div id="catGrid"><div class="cat-list"><div class="cat-row" onclick="openCategory('stock')">
+<div class="cat-row-icon" style="background:#B8714A22;">📈</div>
+<div class="cat-row-info">
+<div class="cat-row-name">股票</div>
+<div class="cat-row-sub">持有 3 筆</div>
+</div>
+<div class="cat-row-right">
+<div class="cat-row-value">$133,100</div>
+<div class="cat-row-roi ">0.0%</div>
+</div>
+</div><div class="cat-row" onclick="openCategory('gold')">
+<div class="cat-row-icon" style="background:#D4AF3722;">🪙</div>
+<div class="cat-row-info">
+<div class="cat-row-name">黃金</div>
+<div class="cat-row-sub">尚無資料</div>
+</div>
+<div class="cat-row-right">
+<div class="cat-row-value">$0</div>
+<div class="cat-row-roi ">—</div>
+</div>
+</div><div class="cat-row" onclick="openCategory('usd')">
+<div class="cat-row-icon" style="background:#6FA88A22;">💴</div>
+<div class="cat-row-info">
+<div class="cat-row-name">美金存款</div>
+<div class="cat-row-sub">尚無資料</div>
+</div>
+<div class="cat-row-right">
+<div class="cat-row-value">$0</div>
+<div class="cat-row-roi ">—</div>
+</div>
+</div><div class="cat-row" onclick="openCategory('policy')">
+<div class="cat-row-icon" style="background:#A87F6F22;">🛡️</div>
+<div class="cat-row-info">
+<div class="cat-row-name">保單</div>
+<div class="cat-row-sub">尚無資料</div>
+</div>
+<div class="cat-row-right">
+<div class="cat-row-value">$0</div>
+<div class="cat-row-roi ">—</div>
+</div>
+</div><div class="cat-row" onclick="openCategory('other')">
+<div class="cat-row-icon" style="background:#9C8B7A22;">✦</div>
+<div class="cat-row-info">
+<div class="cat-row-name">其他</div>
+<div class="cat-row-sub">尚無資料</div>
+</div>
+<div class="cat-row-right">
+<div class="cat-row-value">$0</div>
+<div class="cat-row-roi ">—</div>
+</div>
+</div></div></div>
+</div>
+
+</div>
+
+<!-- ===== LIST SCREEN (per category) ===== -->
+<div class="screen" id="screen-list">
+<div class="back-row">
+<button class="back-btn" onclick="goHome()">‹</button>
+<div class="list-title-wrap">
+<div class="list-title" id="listTitle">股票</div>
+</div>
+</div>
+
+<div class="summary-card">
+<div class="summary-row">
+<div class="strip-item">
+<div class="strip-label">投入</div>
+<div class="strip-value" id="listInvested">$0</div>
+</div>
+<div class="strip-item">
+<div class="strip-label">拿回 / 現值</div>
+<div class="strip-value" id="listValue">$0</div>
+</div>
+<div class="strip-item">
+<div class="strip-label">損益</div>
+<div class="strip-value" id="listPL">$0</div>
+</div>
+<div class="strip-item">
+<div class="strip-label">報酬率</div>
+<div class="strip-value" id="listROI">0%</div>
+</div>
+</div>
+</div>
+
+<div id="entryList"></div>
+</div>
+
+<!-- ===== STOCK DETAIL SCREEN (individual stock records) ===== -->
+<div class="screen" id="screen-stock">
+<div class="back-row">
+<button class="back-btn" id="stockBackBtn" onclick="goBackToStockList()">‹</button>
+<div class="list-title-wrap">
+<div class="topbar-eyebrow" style="font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--ink-soft); font-weight:600;">股票</div>
+<div class="list-title" id="stockDetailTitle">台積電</div>
+</div>
+</div>
+
+<div class="summary-card">
+<div class="summary-row">
+<div class="strip-item">
+<div class="strip-label">投入</div>
+<div class="strip-value" id="stockInvested">$0</div>
+</div>
+<div class="strip-item">
+<div class="strip-label">拿回</div>
+<div class="strip-value" id="stockValue">$0</div>
+</div>
+<div class="strip-item">
+<div class="strip-label">損益</div>
+<div class="strip-value" id="stockPL">$0</div>
+</div>
+<div class="strip-item">
+<div class="strip-label">報酬率</div>
+<div class="strip-value" id="stockROI">0%</div>
+</div>
+</div>
+</div>
+
+<div id="stockEntryList"></div>
+</div>
+
+<!-- ===== SETTINGS SCREEN ===== -->
+<div class="screen active" id="screen-settings">
+<div class="card">
+<div class="card-title" style="margin-bottom:6px;">月度快照</div>
+<div style="font-size:12.5px; color:var(--ink-soft); line-height:1.6; margin-bottom:12px;">
+記錄這個月底的總投入與總資產，會畫進首頁的成長趨勢圖。建議每月手動記一次。
+</div>
+<div class="field-group">
+<label class="field-label">月份</label>
+<input type="month" class="field-input" id="snapMonth">
+</div>
+<div class="calc-hint" style="margin-top:0; display:block;">
+<div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+<span>目前總投入</span><b id="snapInvestedPreview">$133,100</b>
+</div>
+<div style="display:flex; justify-content:space-between;">
+<span>目前總資產</span><b id="snapValuePreview">$133,100</b>
+</div>
+</div>
+<button class="btn btn-primary" style="width:100%;" onclick="saveSnapshot()">記錄這個月快照</button>
+</div>
+
+<div class="card">
+<div class="card-title" style="margin-bottom:6px;">已記錄的快照</div>
+<div id="snapList" style="margin-top:10px;"><div style="font-size:12.5px; color:var(--ink-soft);">尚無快照紀錄</div></div>
+</div>
+
+<div class="card">
+<div class="card-title" style="margin-bottom:4px;">資料與同步</div>
+<div class="settings-row">
+<div>
+<div class="settings-label">資料儲存位置</div>
+<div class="settings-sub">本機儲存，僅這支手機看得到，不是雲端</div>
+</div>
+</div>
+<div class="settings-row">
+<div>
+<div class="settings-label">匯出資料</div>
+<div class="settings-sub">下載備份 JSON 檔到手機</div>
+</div>
+<button class="btn btn-secondary" style="padding:9px 16px; flex:none;" onclick="exportData()">匯出</button>
+</div>
+<div class="settings-row">
+<div>
+<div class="settings-label">匯入資料</div>
+<div class="settings-sub">從備份 JSON 檔還原</div>
+</div>
+<button class="btn btn-secondary" style="padding:9px 16px; flex:none;" onclick="document.getElementById('importFileInput').click()">匯入</button>
+<input type="file" id="importFileInput" accept="application/json,.json" style="display:none;" onchange="importData(event)">
+</div>
+<div class="settings-row">
+<div>
+<div class="settings-label">加到主畫面</div>
+<div class="settings-sub">分享 → 加入主畫面，像 App 一樣使用</div>
+</div>
+</div>
+</div>
+
+<div class="card">
+<div class="card-title" style="margin-bottom:6px; color:#A8503A;">危險區域</div>
+<button class="danger-btn" onclick="clearAllData()">清除所有資料</button>
+</div>
+
+<div class="card">
+<div class="card-title" style="margin-bottom:6px;">複製程式碼</div>
+<div style="font-size:12.5px; color:var(--ink-soft); line-height:1.6; margin-bottom:12px;">
+複製這個 App 的完整 HTML 原始碼，可以貼到文字編輯器存成 .html 檔備份，或分享給別人使用。
+</div>
+<button class="btn btn-primary" style="width:100%;" id="copyCodeBtn" onclick="copySourceCode()">複製程式碼</button>
+</div>
+</div>
+
+</div>
+
+<button class="fab" id="fabBtn" onclick="openEntryModal()" style="display: none;">+</button>
+
+<div class="bottomnav">
+<button class="navbtn" id="nav-home" onclick="goHome()">
+<div class="ic">⌂</div><div class="lb">總覽</div>
+</button>
+<button class="navbtn active" id="nav-settings" onclick="showScreen('settings')">
+<div class="ic">⚙</div><div class="lb">設定</div>
+</button>
+</div>
+
+<!-- ===== Entry Modal ===== -->
+<div class="modal-overlay" id="entryModalOverlay">
+<div class="modal-sheet">
+<div class="sheet-handle"></div>
+<div class="sheet-title" id="modalTitle">新增投資紀錄</div>
+
+<div class="field-group">
+<label class="field-label">類別</label>
+<select class="field-input field-select" id="categorySelect" onchange="onCategorySelectChange()"></select>
+</div>
+
+<div class="field-group">
+<label class="field-label">這是誰的資產？</label>
+<select class="field-input field-select" id="ownerSelect"></select>
+</div>
+
+<!-- stock name: select existing or type new -->
+<div id="stockNamePicker" style="display:none;">
+<div class="field-group">
+<label class="field-label">股票</label>
+<select class="field-input field-select" id="stockNameSelect" onchange="onStockNameSelectChange()"></select>
+</div>
+<div class="field-group" id="newStockNameGroup" style="display:none;">
+<label class="field-label">新股票名稱</label>
+<input class="field-input" id="f_name_stock" placeholder="例如：台積電、00878">
+</div>
+</div>
+
+<div class="field-group" id="genericNameGroup">
+<label class="field-label" id="nameFieldLabel">名稱</label>
+<input class="field-input" id="f_name" placeholder="例如：台積電">
+</div>
+
+<!-- ===== STOCK ===== -->
+<div id="fieldset-stock">
+<div class="field-group">
+<label class="field-label">買進日期</label>
+<input type="date" class="field-input" id="s_buyDate">
+</div>
+<div class="field-row">
+<div class="field-group">
+<label class="field-label">買進股數</label>
+<input type="number" inputmode="decimal" class="field-input" id="s_buyUnits" placeholder="1000">
+</div>
+<div class="field-group">
+<label class="field-label">買進成交價</label>
+<input type="number" inputmode="decimal" class="field-input" id="s_buyPrice" placeholder="950">
+</div>
+</div>
+<div class="field-group">
+<label class="field-label">買進總金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="s_buyTotal" placeholder="手動填，例如 95000">
+</div>
+
+<div class="sell-toggle-row">
+<div>
+<div class="sell-toggle-label">已經賣出了</div>
+<div class="sell-toggle-sub">還沒賣就保持關閉</div>
+</div>
+<div class="toggle-switch" id="s_sellToggle" onclick="toggleSold('stock')"></div>
+</div>
+<div id="s_sellFields" style="display:none;">
+<div class="field-group">
+<label class="field-label">賣出日期</label>
+<input type="date" class="field-input" id="s_sellDate">
+</div>
+<div class="field-row">
+<div class="field-group">
+<label class="field-label">賣出股數</label>
+<input type="number" inputmode="decimal" class="field-input" id="s_sellUnits" placeholder="1000">
+</div>
+<div class="field-group">
+<label class="field-label">賣出成交價</label>
+<input type="number" inputmode="decimal" class="field-input" id="s_sellPrice" placeholder="1050">
+</div>
+</div>
+<div class="field-group">
+<label class="field-label">賣出總金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="s_sellTotal" placeholder="手動填，例如 105000">
+</div>
+</div>
+</div>
+
+<!-- ===== GOLD ===== -->
+<div id="fieldset-gold" style="display:none;">
+<div class="field-group">
+<label class="field-label">買進日期</label>
+<input type="date" class="field-input" id="g_buyDate">
+</div>
+<div class="field-row">
+<div class="field-group">
+<label class="field-label">買進牌價</label>
+<input type="number" inputmode="decimal" class="field-input" id="g_buyRate" placeholder="12500">
+</div>
+<div class="field-group">
+<label class="field-label">兩數</label>
+<input type="number" inputmode="decimal" class="field-input" id="g_buyWeight" placeholder="2">
+</div>
+</div>
+<div class="field-group">
+<label class="field-label">工錢</label>
+<input type="number" inputmode="decimal" class="field-input" id="g_buyFee" placeholder="500">
+</div>
+<div class="field-group">
+<label class="field-label">買進總金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="g_buyTotal" placeholder="手動填，例如 25500">
+</div>
+
+<div class="sell-toggle-row">
+<div>
+<div class="sell-toggle-label">已經賣出了</div>
+<div class="sell-toggle-sub">還沒賣就保持關閉</div>
+</div>
+<div class="toggle-switch" id="g_sellToggle" onclick="toggleSold('gold')"></div>
+</div>
+<div id="g_sellFields" style="display:none;">
+<div class="field-group">
+<label class="field-label">賣出日期</label>
+<input type="date" class="field-input" id="g_sellDate">
+</div>
+<div class="field-row">
+<div class="field-group">
+<label class="field-label">賣出牌價</label>
+<input type="number" inputmode="decimal" class="field-input" id="g_sellRate" placeholder="13000">
+</div>
+<div class="field-group">
+<label class="field-label">兩數</label>
+<input type="number" inputmode="decimal" class="field-input" id="g_sellWeight" placeholder="2">
+</div>
+</div>
+<div class="field-group">
+<label class="field-label">賣出總金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="g_sellTotal" placeholder="手動填，例如 26000">
+</div>
+</div>
+</div>
+
+<!-- ===== USD ===== -->
+<div id="fieldset-usd" style="display:none;">
+<div class="field-group">
+<label class="field-label">存入日期</label>
+<input type="date" class="field-input" id="u_buyDate">
+</div>
+<div class="field-row">
+<div class="field-group">
+<label class="field-label">美金金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="u_buyUsd" placeholder="3000">
+</div>
+<div class="field-group">
+<label class="field-label">當時匯率</label>
+<input type="number" inputmode="decimal" class="field-input" id="u_buyFx" placeholder="32.5">
+</div>
+</div>
+<div class="field-group">
+<label class="field-label">台幣金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="u_buyTwd" placeholder="手動填，例如 97500">
+</div>
+
+<div class="sell-toggle-row">
+<div>
+<div class="sell-toggle-label">已經換回台幣了</div>
+<div class="sell-toggle-sub">還沒換就保持關閉</div>
+</div>
+<div class="toggle-switch" id="u_sellToggle" onclick="toggleSold('usd')"></div>
+</div>
+<div id="u_sellFields" style="display:none;">
+<div class="field-group">
+<label class="field-label">換回日期</label>
+<input type="date" class="field-input" id="u_sellDate">
+</div>
+<div class="field-row">
+<div class="field-group">
+<label class="field-label">美金金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="u_sellUsd" placeholder="3000">
+</div>
+<div class="field-group">
+<label class="field-label">當時匯率</label>
+<input type="number" inputmode="decimal" class="field-input" id="u_sellFx" placeholder="32.8">
+</div>
+</div>
+<div class="field-group">
+<label class="field-label">台幣金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="u_sellTwd" placeholder="手動填，例如 98400">
+</div>
+</div>
+</div>
+
+<!-- ===== POLICY ===== -->
+<div id="fieldset-policy" style="display:none;">
+<div class="field-group">
+<label class="field-label">投保日期</label>
+<input type="date" class="field-input" id="p_buyDate">
+</div>
+<div class="field-group">
+<label class="field-label">投入金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="p_buyTotal" placeholder="120000">
+</div>
+
+<div class="sell-toggle-row">
+<div>
+<div class="sell-toggle-label">已經解約 / 領回了</div>
+<div class="sell-toggle-sub">還沒領回就保持關閉</div>
+</div>
+<div class="toggle-switch" id="p_sellToggle" onclick="toggleSold('policy')"></div>
+</div>
+<div id="p_sellFields" style="display:none;">
+<div class="field-group">
+<label class="field-label">領回日期</label>
+<input type="date" class="field-input" id="p_sellDate">
+</div>
+<div class="field-group">
+<label class="field-label">領回金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="p_sellTotal" placeholder="125000">
+</div>
+</div>
+</div>
+
+<!-- ===== OTHER ===== -->
+<div id="fieldset-other" style="display:none;">
+<div class="field-group">
+<label class="field-label">投入日期</label>
+<input type="date" class="field-input" id="o_buyDate">
+</div>
+<div class="field-group">
+<label class="field-label">投入金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="o_buyTotal" placeholder="50000">
+</div>
+
+<div class="sell-toggle-row">
+<div>
+<div class="sell-toggle-label">已經賣出 / 拿回了</div>
+<div class="sell-toggle-sub">還沒拿回就保持關閉</div>
+</div>
+<div class="toggle-switch" id="o_sellToggle" onclick="toggleSold('other')"></div>
+</div>
+<div id="o_sellFields" style="display:none;">
+<div class="field-group">
+<label class="field-label">拿回日期</label>
+<input type="date" class="field-input" id="o_sellDate">
+</div>
+<div class="field-group">
+<label class="field-label">拿回金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="o_sellTotal" placeholder="52000">
+</div>
+</div>
+</div>
+
+<div class="calc-hint">
+<span id="plLabel">尚未賣出，暫無損益</span><b id="plPreview">$0 / 0%</b>
+</div>
+
+<div class="field-group">
+<label class="field-label">備註（選填）</label>
+<input class="field-input" id="f_note" placeholder="">
+</div>
+
+<div class="sheet-actions">
+<button class="btn btn-secondary" onclick="closeEntryModal()">取消</button>
+<button class="btn btn-primary" onclick="saveEntry()">儲存</button>
+</div>
+</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="confirm-overlay" id="confirmOverlay">
+<div class="confirm-box">
+<div class="confirm-title" id="confirmTitle">確定要刪除嗎？</div>
+<div class="confirm-msg" id="confirmMsg">此動作無法復原。</div>
+<div class="confirm-actions">
+<button class="confirm-cancel" id="confirmCancelBtn">取消</button>
+<button class="confirm-ok" id="confirmOkBtn">刪除</button>
+</div>
+</div>
+</div>
+
+<script>
+/* ============================================================
+DATA MODEL
+Every field across every category is manually entered by the
+user -- nothing is auto-calculated from sub-fields (e.g. stock's
+"buyTotal" is its own typed number, not units*price). The only
+computed thing in the whole app is P/L = sellTotal - buyTotal.
+
+Per-category extra fields are kept (units/price for stock, rate/
+weight/fee for gold, usd/fx for usd) purely as a reference record
+of what you typed -- they do not feed any formula.
+============================================================ */
+const CATEGORIES = [
+{ key:'stock', name:'股票', icon:'📈', color:'#B8714A' },
+{ key:'gold', name:'黃金', icon:'🪙', color:'#D4AF37' },
+{ key:'usd', name:'美金存款', icon:'💴', color:'#6FA88A' },
+{ key:'policy', name:'保單', icon:'🛡️', color:'#A87F6F' },
+{ key:'other', name:'其他', icon:'✦', color:'#9C8B7A' },
+];
+
+const OWNERS = [
+{ key:'me', name:'我的資產', icon:'🐻' },
+{ key:'we', name:'共同資產', icon:'👫' },
+];
+
+const STORAGE_KEY = 'invest_dashboard_v4';
+const SNAP_KEY = 'invest_dashboard_snapshots_v1';
+const OLD_STORAGE_KEY_V3 = 'invest_dashboard_v3';
+
+let DB = loadDB();
+let SNAPSHOTS = loadSnapshots();
+let currentCategory = null;
+let editingId = null;
+let activeOwnerFilter = null;
+let soldState = {stock:false, gold:false, usd:false, policy:false, other:false};
+
+function loadDB(){
+try{
+const raw = localStorage.getItem(STORAGE_KEY);
+if(raw) return JSON.parse(raw);
+}catch(e){}
+
+const fresh = {};
+CATEGORIES.forEach(c => fresh[c.key] = []);
+
+// best-effort migration from the previous unified buy/sell schema
+try{
+const oldRaw = localStorage.getItem(OLD_STORAGE_KEY_V3);
+if(oldRaw){
+const old = JSON.parse(oldRaw);
+CATEGORIES.forEach(c=>{
+const list = old[c.key];
+if(!Array.isArray(list)) return;
+fresh[c.key] = list.map(e=>({
+id:e.id, name:e.name||'未命名', owner:e.owner||'me', note:e.note||'',
+buyDate:e.buyDate||'', buyTotal:e.buyAmount||0,
+sold: !!e.sold, sellDate:e.sellDate||'', sellTotal:e.sellAmount||0
+}));
+});
+}
+}catch(e){}
+return fresh;
+}
+function saveDB(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(DB)); }
+
+function loadSnapshots(){
+try{
+const raw = localStorage.getItem(SNAP_KEY);
+if(raw) return JSON.parse(raw);
+}catch(e){}
+return [];
+}
+function saveSnapshots(){ localStorage.setItem(SNAP_KEY, JSON.stringify(SNAPSHOTS)); }
+
+function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2,7); }
+
+/* ============================================================
+CALCULATIONS — only P/L = sellTotal - buyTotal, everything
+else is just a typed reference number
+============================================================ */
+function entryInvested(e){ return parseFloat(e.buyTotal)||0; }
+function entryValue(e){ return e.sold ? (parseFloat(e.sellTotal)||0) : (parseFloat(e.buyTotal)||0); }
+function entryPL(e){ return entryValue(e) - entryInvested(e); }
+
+function categoryTotals(key, ownerFilter){
+let list = DB[key] || [];
+if(ownerFilter) list = list.filter(e => (e.owner||'me') === ownerFilter);
+let invested=0, value=0, realizedPL=0, unrealizedPL=0;
+list.forEach(e=>{
+const inv = entryInvested(e);
+const val = entryValue(e);
+invested += inv;
+value += val;
+if(e.sold) realizedPL += (val-inv);
+else unrealizedPL += (val-inv);
+});
+const pl = value - invested;
+const roi = invested === 0 ? 0 : pl/invested;
+return {invested, value, pl, roi, count:list.length, realizedPL, unrealizedPL};
+}
+
+function grandTotals(ownerFilter){
+let invested=0, value=0, realizedPL=0, unrealizedPL=0;
+CATEGORIES.forEach(c=>{
+const t = categoryTotals(c.key, ownerFilter);
+invested += t.invested; value += t.value;
+realizedPL += t.realizedPL; unrealizedPL += t.unrealizedPL;
+});
+const pl = value - invested;
+const roi = invested === 0 ? 0 : pl/invested;
+return {invested, value, pl, roi, realizedPL, unrealizedPL};
+}
+
+/* ============================================================
+FORMATTERS
+============================================================ */
+function fmtMoney(n){
+const rounded = Math.round(n);
+const sign = rounded < 0 ? '-' : '';
+return sign + '$' + Math.abs(rounded).toLocaleString('en-US');
+}
+function fmtPct(n){
+const pct = (n*100);
+const sign = pct > 0 ? '+' : '';
+return sign + pct.toFixed(1) + '%';
+}
+function plClass(n){ return n > 0 ? 'pos' : (n < 0 ? 'neg' : ''); }
+function badgeClass(n){ return n > 0 ? 'badge-pos' : (n < 0 ? 'badge-neg' : 'badge-zero'); }
+function escapeHtml(s){
+return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+/* ============================================================
+RENDER: HOME
+============================================================ */
+function renderOwnerFilter(){
+const wrap = document.getElementById('ownerFilter');
+const allChip = `<div class="owner-chip ${activeOwnerFilter===null?'active':''}" onclick="setOwnerFilter(null)">
+<div class="oc-icon">✦</div><div class="oc-label">全部</div>
+</div>`;
+const ownerChips = OWNERS.map(o=>
+`<div class="owner-chip ${activeOwnerFilter===o.key?'active':''}" onclick="setOwnerFilter('${o.key}')">
+<div class="oc-icon">${o.icon}</div><div class="oc-label">${o.name}</div>
+</div>`
+).join('');
+wrap.innerHTML = allChip + ownerChips;
+}
+function setOwnerFilter(key){
+activeOwnerFilter = key;
+renderHome();
+}
+
+function renderHome(){
+renderOwnerFilter();
+const g = grandTotals(activeOwnerFilter);
+document.getElementById('heroTotalValue').textContent = fmtMoney(g.value);
+document.getElementById('heroInvested').textContent = fmtMoney(g.invested);
+const plEl = document.getElementById('heroPL');
+plEl.textContent = fmtMoney(g.pl);
+plEl.className = 'hero-sub-value ' + plClass(g.pl);
+const roiEl = document.getElementById('heroROI');
+roiEl.textContent = fmtPct(g.roi);
+roiEl.className = 'hero-sub-value ' + plClass(g.pl);
+
+renderPie(g);
+renderCatGrid();
+}
+
+function renderPie(g){
+const wrap = document.getElementById('pieWrap');
+const data = CATEGORIES.map(c=>({...c, ...categoryTotals(c.key, activeOwnerFilter)})).filter(d=>d.value > 0);
+
+if(data.length === 0){
+wrap.innerHTML = `<div class="empty-state" style="padding:20px 0;">
+<div class="ico">◌</div>
+<div class="t">還沒有資料</div>
+<div class="s">新增第一筆投資紀錄後<br>這裡會顯示資產占比</div>
+</div>`;
+return;
+}
+
+const total = data.reduce((s,d)=>s+d.value,0);
+let angle = -90;
+const r = 52, cx=60, cy=60;
+let paths = '';
+data.forEach(d=>{
+const frac = d.value/total;
+const sweep = frac*360;
+const a0 = angle*Math.PI/180;
+const a1 = (angle+sweep)*Math.PI/180;
+const x0 = cx + r*Math.cos(a0), y0 = cy + r*Math.sin(a0);
+const x1 = cx + r*Math.cos(a1), y1 = cy + r*Math.sin(a1);
+const large = sweep > 180 ? 1 : 0;
+if(frac >= 0.999){
+paths += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${d.color}"/>`;
+} else {
+paths += `<path d="M${cx},${cy} L${x0},${y0} A${r},${r} 0 ${large} 1 ${x1},${y1} Z" fill="${d.color}"/>`;
+}
+angle += sweep;
+});
+
+const svg = `<svg class="pie-svg" width="120" height="120" viewBox="0 0 120 120">
+${paths}
+<circle cx="${cx}" cy="${cy}" r="30" fill="var(--card)"/>
+</svg>`;
+
+const legend = data
+.sort((a,b)=>b.value-a.value)
+.map(d=>`<div class="legend-row">
+<span class="legend-dot" style="background:${d.color}"></span>
+<span class="legend-name">${d.name}</span>
+<span class="legend-pct">${((d.value/total)*100).toFixed(0)}%</span>
+</div>`).join('');
+
+wrap.innerHTML = svg + `<div class="legend">${legend}</div>`;
+}
+
+function renderCatGrid(){
+const grid = document.getElementById('catGrid');
+const rows = CATEGORIES.map(c=>{
+const t = categoryTotals(c.key, activeOwnerFilter);
+const holding = (DB[c.key]||[]).filter(e=>!e.sold && (!activeOwnerFilter || (e.owner||'me')===activeOwnerFilter)).length;
+const sold = (DB[c.key]||[]).filter(e=> e.sold && (!activeOwnerFilter || (e.owner||'me')===activeOwnerFilter)).length;
+const subText = t.count === 0 ? '尚無資料' : `持有 ${holding} 筆${sold>0?' · 已賣出 '+sold+' 筆':''}`;
+return `<div class="cat-row" onclick="openCategory('${c.key}')">
+<div class="cat-row-icon" style="background:${c.color}22;">${c.icon}</div>
+<div class="cat-row-info">
+<div class="cat-row-name">${c.name}</div>
+<div class="cat-row-sub">${subText}</div>
+</div>
+<div class="cat-row-right">
+<div class="cat-row-value">${fmtMoney(t.value)}</div>
+<div class="cat-row-roi ${plClass(t.pl)}">${t.count===0 ? '—' : fmtPct(t.roi)}</div>
+</div>
+</div>`;
+}).join('');
+grid.innerHTML = `<div class="cat-list">${rows}</div>`;
+}
+
+/* ============================================================
+RENDER: LIST
+============================================================ */
+function openCategory(key){
+currentCategory = key;
+const cat = CATEGORIES.find(c=>c.key===key);
+document.getElementById('topbarEyebrow').textContent = '類別';
+document.getElementById('topbarTitle').textContent = cat.name;
+
+if(key === 'stock'){
+document.getElementById('listTitle').textContent = '股票';
+renderStockList();
+showScreen('list');
+} else {
+document.getElementById('listTitle').textContent = cat.name;
+renderList();
+showScreen('list');
+}
+}
+
+const EXTRA_FIELD_RENDERERS = {
+stock(e){
+return e.sold
+? [['買進股數', e.buyUnits||0], ['買進成交價', fmtMoney(parseFloat(e.buyPrice)||0)],
+['賣出股數', e.sellUnits||0], ['賣出成交價', fmtMoney(parseFloat(e.sellPrice)||0)]]
+: [['買進股數', e.buyUnits||0], ['買進成交價', fmtMoney(parseFloat(e.buyPrice)||0)]];
+},
+gold(e){
+return e.sold
+? [['買進牌價', fmtMoney(parseFloat(e.buyRate)||0)], ['買進兩數', e.buyWeight||0],
+['工錢', fmtMoney(parseFloat(e.buyFee)||0)],
+['賣出牌價', fmtMoney(parseFloat(e.sellRate)||0)], ['賣出兩數', e.sellWeight||0]]
+: [['買進牌價', fmtMoney(parseFloat(e.buyRate)||0)], ['買進兩數', e.buyWeight||0], ['工錢', fmtMoney(parseFloat(e.buyFee)||0)]];
+},
+usd(e){
+return e.sold
+? [['買進美金', 'US$ '+(parseFloat(e.buyUsd)||0).toLocaleString('en-US')], ['買進匯率', e.buyFx||0],
+['換回美金', 'US$ '+(parseFloat(e.sellUsd)||0).toLocaleString('en-US')], ['換回匯率', e.sellFx||0]]
+: [['美金金額', 'US$ '+(parseFloat(e.buyUsd)||0).toLocaleString('en-US')], ['當時匯率', e.buyFx||0]];
+},
+policy(){ return []; },
+other(){ return []; }
+};
+
+/* ============================================================
+STOCK TWO-LEVEL: list of stock names → individual records
+============================================================ */
+let currentStockName = null; // which stock is open in screen-stock
+
+function getStockNames(ownerFilter){
+// returns unique stock names from DB.stock, respecting owner filter
+const list = (DB.stock||[]).filter(e => !ownerFilter || (e.owner||'me') === ownerFilter);
+const names = [...new Set(list.map(e=>e.name||'未命名'))];
+return names.sort();
+}
+
+function stockTotalsForName(name, ownerFilter){
+let list = (DB.stock||[]).filter(e=>(e.name||'未命名')===name);
+if(ownerFilter) list = list.filter(e=>(e.owner||'me')===ownerFilter);
+let invested=0, value=0;
+list.forEach(e=>{ invested += entryInvested(e); value += entryValue(e); });
+const pl = value - invested;
+const roi = invested===0 ? 0 : pl/invested;
+const holding = list.filter(e=>!e.sold).length;
+const sold = list.filter(e=>e.sold).length;
+return {invested, value, pl, roi, holding, sold, count:list.length};
+}
+
+function renderStockList(){
+// updates the summary strip for ALL stocks combined
+const t = categoryTotals('stock', activeOwnerFilter);
+document.getElementById('listInvested').textContent = fmtMoney(t.invested);
+document.getElementById('listValue').textContent = fmtMoney(t.value);
+const plEl = document.getElementById('listPL');
+plEl.textContent = fmtMoney(t.pl);
+plEl.className = 'strip-value ' + plClass(t.pl);
+const roiEl = document.getElementById('listROI');
+roiEl.textContent = fmtPct(t.roi);
+roiEl.className = 'strip-value ' + plClass(t.pl);
+
+const names = getStockNames(activeOwnerFilter);
+const container = document.getElementById('entryList');
+
+if(names.length === 0){
+container.innerHTML = `<div class="empty-state">
+<div class="ico">📈</div>
+<div class="t">還沒有股票紀錄</div>
+<div class="s">點右下角的「＋」<br>新增第一筆股票買進紀錄</div>
+</div>`;
+return;
+}
+
+const rows = names.map(name=>{
+const st = stockTotalsForName(name, activeOwnerFilter);
+const ticker = name.slice(0,4).toUpperCase();
+const sub = `${st.holding} 筆持有中${st.sold>0 ? ' · '+st.sold+' 筆已賣出':''}`;
+return `<div class="stock-row" onclick="openStock('${escapeHtml(name).replace(/'/g,"\\'")}')">
+<div class="stock-row-ticker">${ticker}</div>
+<div class="stock-row-info">
+<div class="stock-row-name">${escapeHtml(name)}</div>
+<div class="stock-row-sub">${sub}</div>
+</div>
+<div class="stock-row-right">
+<div class="stock-row-pl ${plClass(st.pl)}">${fmtMoney(st.pl)}</div>
+<div class="stock-row-roi ${plClass(st.pl)}">${fmtPct(st.roi)}</div>
+</div>
+</div>`;
+}).join('');
+
+container.innerHTML = `<div class="stock-list">${rows}</div>`;
+}
+
+function openStock(name){
+currentStockName = name;
+document.getElementById('stockDetailTitle').textContent = name;
+document.getElementById('topbarEyebrow').textContent = '股票';
+document.getElementById('topbarTitle').textContent = name;
+renderStockDetail();
+showScreen('stock');
+}
+
+function renderStockDetail(){
+if(!currentStockName) return;
+const st = stockTotalsForName(currentStockName, activeOwnerFilter);
+
+document.getElementById('stockInvested').textContent = fmtMoney(st.invested);
+document.getElementById('stockValue').textContent = fmtMoney(st.value);
+const plEl = document.getElementById('stockPL');
+plEl.textContent = fmtMoney(st.pl);
+plEl.className = 'strip-value ' + plClass(st.pl);
+const roiEl = document.getElementById('stockROI');
+roiEl.textContent = fmtPct(st.roi);
+roiEl.className = 'strip-value ' + plClass(st.pl);
+
+let list = (DB.stock||[]).filter(e=>(e.name||'未命名')===currentStockName);
+if(activeOwnerFilter) list = list.filter(e=>(e.owner||'me')===activeOwnerFilter);
+const sorted = [...list].sort((a,b)=>(b.buyDate||'').localeCompare(a.buyDate||''));
+
+const container = document.getElementById('stockEntryList');
+
+if(sorted.length === 0){
+container.innerHTML = `<div class="empty-state">
+<div class="ico">📈</div>
+<div class="t">沒有符合的紀錄</div>
+</div>`;
+return;
+}
+
+container.innerHTML = sorted.map(e=>{
+const inv = entryInvested(e);
+const val = entryValue(e);
+const pl = val - inv;
+const roi = inv===0 ? 0 : pl/inv;
+const owner = OWNERS.find(o=>o.key===(e.owner||'me'))||OWNERS[0];
+return `<div class="entry-card">
+<div class="entry-top">
+<div style="min-width:0;">
+<div class="entry-tags">
+<span class="status-tag ${e.sold?'status-sold':'status-holding'}">${e.sold?'已賣出':'持有中'}</span>
+<span class="status-tag status-owner">${owner.icon} ${owner.name}</span>
+</div>
+<div class="entry-date" style="margin-top:6px;">買進 ${e.buyDate||'—'}${e.sold?' → 賣出 '+(e.sellDate||'—'):''}</div>
+</div>
+<div class="entry-roi-badge ${badgeClass(pl)}">${fmtPct(roi)}</div>
+</div>
+<div class="entry-grid">
+<div class="entry-field">
+<div class="entry-field-label">買進總金額</div>
+<div class="entry-field-value">${fmtMoney(inv)}</div>
+</div>
+<div class="entry-field">
+<div class="entry-field-label">${e.sold?'賣出總金額':'狀態'}</div>
+<div class="entry-field-value">${e.sold?fmtMoney(val):'持有中'}</div>
+</div>
+<div class="entry-field">
+<div class="entry-field-label">買進股數</div>
+<div class="entry-field-value">${e.buyUnits||0} 股</div>
+</div>
+<div class="entry-field">
+<div class="entry-field-label">買進成交價</div>
+<div class="entry-field-value">${fmtMoney(parseFloat(e.buyPrice)||0)}</div>
+</div>
+${e.sold?`
+<div class="entry-field">
+<div class="entry-field-label">賣出股數</div>
+<div class="entry-field-value">${e.sellUnits||0} 股</div>
+</div>
+<div class="entry-field">
+<div class="entry-field-label">賣出成交價</div>
+<div class="entry-field-value">${fmtMoney(parseFloat(e.sellPrice)||0)}</div>
+</div>`:''}
+<div class="entry-field full">
+<div class="entry-field-label">${e.sold?'已賺 / 賠多少':'尚未實現損益'}</div>
+<div class="entry-field-value ${plClass(pl)}">${fmtMoney(pl)}</div>
+</div>
+</div>
+${e.note?`<div style="font-size:11.5px; color:var(--ink-soft); margin-top:8px;">📝 ${escapeHtml(e.note)}</div>`:''}
+<div class="entry-actions">
+<button onclick="editEntry('${e.id}')">編輯</button>
+<button class="del" onclick="deleteEntry('${e.id}')">刪除</button>
+</div>
+</div>`;
+}).join('');
+}
+
+function goBackToStockList(){
+currentStockName = null;
+document.getElementById('topbarEyebrow').textContent = '類別';
+document.getElementById('topbarTitle').textContent = '股票';
+showScreen('list');
+}
+
+function renderList(){
+if(!currentCategory) return;
+const cat = CATEGORIES.find(c=>c.key===currentCategory);
+const t = categoryTotals(currentCategory, activeOwnerFilter);
+
+document.getElementById('listInvested').textContent = fmtMoney(t.invested);
+document.getElementById('listValue').textContent = fmtMoney(t.value);
+const plEl = document.getElementById('listPL');
+plEl.textContent = fmtMoney(t.pl);
+plEl.className = 'strip-value ' + plClass(t.pl);
+const roiEl = document.getElementById('listROI');
+roiEl.textContent = fmtPct(t.roi);
+roiEl.className = 'strip-value ' + plClass(t.pl);
+
+let list = DB[currentCategory] || [];
+if(activeOwnerFilter) list = list.filter(e => (e.owner||'me') === activeOwnerFilter);
+const container = document.getElementById('entryList');
+
+if(list.length === 0){
+container.innerHTML = `<div class="empty-state">
+<div class="ico">${cat.icon}</div>
+<div class="t">還沒有${cat.name}紀錄</div>
+<div class="s">點右下角的「＋」<br>新增第一筆投入紀錄</div>
+</div>`;
+return;
+}
+
+const sorted = [...list].sort((a,b)=> (b.buyDate||'').localeCompare(a.buyDate||''));
+
+container.innerHTML = sorted.map(e=>{
+const inv = entryInvested(e);
+const val = entryValue(e);
+const pl = val - inv;
+const roi = inv === 0 ? 0 : pl/inv;
+const owner = OWNERS.find(o=>o.key === (e.owner||'me')) || OWNERS[0];
+
+const extraFields = (EXTRA_FIELD_RENDERERS[currentCategory] ? EXTRA_FIELD_RENDERERS[currentCategory](e) : [])
+.map(([label,val])=>`<div class="entry-field"><div class="entry-field-label">${label}</div><div class="entry-field-value">${val}</div></div>`)
+.join('');
+
+return `<div class="entry-card">
+<div class="entry-top">
+<div style="min-width:0;">
+<div class="entry-tags">
+<span class="status-tag ${e.sold?'status-sold':'status-holding'}">${e.sold?'已賣出':'持有中'}</span>
+<span class="status-tag status-owner">${owner.icon} ${owner.name}</span>
+</div>
+<div class="entry-name">${escapeHtml(e.name||'未命名')}</div>
+<div class="entry-date">買進 ${e.buyDate||'—'}${e.sold ? ' → 賣出 ' + (e.sellDate||'—') : ''}</div>
+</div>
+<div class="entry-roi-badge ${badgeClass(pl)}">${fmtPct(roi)}</div>
+</div>
+<div class="entry-grid">
+<div class="entry-field">
+<div class="entry-field-label">買進總金額</div>
+<div class="entry-field-value">${fmtMoney(inv)}</div>
+</div>
+<div class="entry-field">
+<div class="entry-field-label">${e.sold ? '賣出總金額' : '狀態'}</div>
+<div class="entry-field-value">${e.sold ? fmtMoney(val) : '持有中'}</div>
+</div>
+${extraFields}
+<div class="entry-field full">
+<div class="entry-field-label">${e.sold ? '已賺 / 賠多少' : '尚未實現損益'}</div>
+<div class="entry-field-value ${plClass(pl)}">${fmtMoney(pl)}</div>
+</div>
+</div>
+${e.note ? `<div style="font-size:11.5px; color:var(--ink-soft); margin-top:8px;">📝 ${escapeHtml(e.note)}</div>` : ''}
+<div class="entry-actions">
+<button onclick="editEntry('${e.id}')">編輯</button>
+<button class="del" onclick="deleteEntry('${e.id}')">刪除</button>
+</div>
+</div>`;
+}).join('');
+}
+
+/* ============================================================
+ENTRY MODAL
+============================================================ */
+const NAME_PLACEHOLDERS = {
+stock:'例如：台積電、0050',
+gold:'例如：周大福金條、項鍊',
+usd:'例如：兆豐美金活存',
+policy:'例如：南山美利人生',
+other:'例如：朋友合夥案'
+};
+const NAME_LABELS = {
+stock:'標的名稱', gold:'品項名稱', usd:'帳戶 / 用途', policy:'保單名稱', other:'項目名稱'
+};
+
+function openEntryModal(){
+editingId = null;
+document.getElementById('modalTitle').textContent = '新增投資紀錄';
+document.getElementById('f_name').value = '';
+document.getElementById('f_name_stock').value = '';
+document.getElementById('f_note').value = '';
+resetAllFieldsets();
+
+const initialCat = currentCategory || CATEGORIES[0].key;
+buildCategoryChips(initialCat);
+buildOwnerChips(activeOwnerFilter || 'me');
+showFieldsetFor(initialCat);
+if(initialCat === 'stock' && currentStockName){
+buildStockNameChips(currentStockName);
+}
+CATEGORIES.forEach(c => setSoldToggle(c.key, false));
+updatePreview();
+document.getElementById('entryModalOverlay').classList.add('active');
+}
+
+function closeEntryModal(){
+document.getElementById('entryModalOverlay').classList.remove('active');
+}
+
+function resetAllFieldsets(){
+const today = new Date().toISOString().slice(0,10);
+document.getElementById('s_buyDate').value = today;
+document.getElementById('s_buyUnits').value = '';
+document.getElementById('s_buyPrice').value = '';
+document.getElementById('s_buyTotal').value = '';
+document.getElementById('s_sellDate').value = today;
+document.getElementById('s_sellUnits').value = '';
+document.getElementById('s_sellPrice').value = '';
+document.getElementById('s_sellTotal').value = '';
+
+document.getElementById('g_buyDate').value = today;
+document.getElementById('g_buyRate').value = '';
+document.getElementById('g_buyWeight').value = '';
+document.getElementById('g_buyFee').value = '';
+document.getElementById('g_buyTotal').value = '';
+document.getElementById('g_sellDate').value = today;
+document.getElementById('g_sellRate').value = '';
+document.getElementById('g_sellWeight').value = '';
+document.getElementById('g_sellTotal').value = '';
+
+document.getElementById('u_buyDate').value = today;
+document.getElementById('u_buyUsd').value = '';
+document.getElementById('u_buyFx').value = '';
+document.getElementById('u_buyTwd').value = '';
+document.getElementById('u_sellDate').value = today;
+document.getElementById('u_sellUsd').value = '';
+document.getElementById('u_sellFx').value = '';
+document.getElementById('u_sellTwd').value = '';
+
+document.getElementById('p_buyDate').value = today;
+document.getElementById('p_buyTotal').value = '';
+document.getElementById('p_sellDate').value = today;
+document.getElementById('p_sellTotal').value = '';
+
+document.getElementById('o_buyDate').value = today;
+document.getElementById('o_buyTotal').value = '';
+document.getElementById('o_sellDate').value = today;
+document.getElementById('o_sellTotal').value = '';
+}
+
+function showFieldsetFor(key){
+['stock','gold','usd','policy','other'].forEach(k=>{
+document.getElementById('fieldset-'+k).style.display = (k===key) ? 'block' : 'none';
+});
+// stock: show name picker; others: show plain input
+const isStock = key === 'stock';
+document.getElementById('stockNamePicker').style.display = isStock ? 'block' : 'none';
+document.getElementById('genericNameGroup').style.display = isStock ? 'none' : 'block';
+if(isStock){
+buildStockNameChips(currentStockName || null);
+} else {
+document.getElementById('f_name').placeholder = NAME_PLACEHOLDERS[key] || '';
+document.getElementById('nameFieldLabel').textContent = NAME_LABELS[key] || '名稱';
+}
+updatePreview();
+}
+
+function buildStockNameChips(selectedName){
+const sel = document.getElementById('stockNameSelect');
+const names = getStockNames(null);
+let options = names.map(n=>
+`<option value="${escapeHtml(n)}" ${n===selectedName?'selected':''}>${escapeHtml(n)}</option>`
+).join('');
+options += `<option value="__new__" ${'__new__'===selectedName?'selected':''}>＋ 新股票</option>`;
+sel.innerHTML = options;
+if(names.length === 0) sel.value = '__new__';
+const showNew = sel.value === '__new__';
+document.getElementById('newStockNameGroup').style.display = showNew ? 'block' : 'none';
+}
+
+function onStockNameSelectChange(){
+const val = document.getElementById('stockNameSelect').value;
+document.getElementById('newStockNameGroup').style.display = val === '__new__' ? 'block' : 'none';
+if(val !== '__new__') document.getElementById('f_name_stock').value = '';
+}
+
+function getSelectedStockName(){
+const val = document.getElementById('stockNameSelect').value;
+if(val === '__new__') return (document.getElementById('f_name_stock').value||'').trim();
+return val;
+}
+
+function buildCategoryChips(selectedKey){
+const sel = document.getElementById('categorySelect');
+sel.innerHTML = CATEGORIES.map(c=>
+`<option value="${c.key}" ${c.key===selectedKey?'selected':''}>${c.icon} ${c.name}</option>`
+).join('');
+}
+function onCategorySelectChange(){
+const key = document.getElementById('categorySelect').value;
+showFieldsetFor(key);
+}
+function getSelectedCategory(){
+return document.getElementById('categorySelect').value || CATEGORIES[0].key;
+}
+
+function buildOwnerChips(selectedKey){
+const sel = document.getElementById('ownerSelect');
+sel.innerHTML = OWNERS.map(o=>
+`<option value="${o.key}" ${o.key===selectedKey?'selected':''}>${o.icon} ${o.name}</option>`
+).join('');
+}
+function getSelectedOwner(){
+return document.getElementById('ownerSelect').value || 'me';
+}
+
+function toggleSold(catKey){ setSoldToggle(catKey, !soldState[catKey]); }
+function setSoldToggle(catKey, val){
+soldState[catKey] = val;
+const prefix = {stock:'s',gold:'g',usd:'u',policy:'p',other:'o'}[catKey];
+document.getElementById(prefix+'_sellToggle').classList.toggle('on', val);
+document.getElementById(prefix+'_sellFields').style.display = val ? 'block' : 'none';
+updatePreview();
+}
+
+function getBuyTotalFieldId(key){
+return {stock:'s_buyTotal', gold:'g_buyTotal', usd:'u_buyTwd', policy:'p_buyTotal', other:'o_buyTotal'}[key];
+}
+function getSellTotalFieldId(key){
+return {stock:'s_sellTotal', gold:'g_sellTotal', usd:'u_sellTwd', policy:'p_sellTotal', other:'o_sellTotal'}[key];
+}
+
+function updatePreview(){
+const key = getSelectedCategory();
+const sold = soldState[key];
+const buyTotal = parseFloat(document.getElementById(getBuyTotalFieldId(key)).value)||0;
+const preview = document.getElementById('plPreview');
+const label = document.getElementById('plLabel');
+
+if(!sold){
+label.textContent = '尚未賣出，暫無損益';
+preview.innerHTML = `<span style="color:var(--ink-soft);">$0 / 0%</span>`;
+return;
+}
+const sellTotal = parseFloat(document.getElementById(getSellTotalFieldId(key)).value)||0;
+const pl = sellTotal - buyTotal;
+const roi = buyTotal === 0 ? 0 : pl/buyTotal;
+label.textContent = '已賺 / 已賠 / 報酬率';
+preview.innerHTML = `<span class="${plClass(pl)}">${fmtMoney(pl)} / ${fmtPct(roi)}</span>`;
+}
+
+function bindModalInputs(){
+const ids = [
+'s_buyTotal','s_sellTotal','g_buyTotal','g_sellTotal',
+'u_buyTwd','u_sellTwd','p_buyTotal','p_sellTotal','o_buyTotal','o_sellTotal'
+];
+ids.forEach(id=>{
+document.getElementById(id).addEventListener('input', updatePreview);
+});
+}
+
+function saveEntry(){
+const key = getSelectedCategory();
+const name = key === 'stock' ? getSelectedStockName() : document.getElementById('f_name').value.trim();
+if(!name){
+showToast(key === 'stock' ? '請選擇或輸入股票名稱' : '請輸入名稱');
+return;
+}
+const owner = getSelectedOwner();
+const note = document.getElementById('f_note').value.trim();
+const sold = soldState[key];
+
+let entry = { id: editingId || uid(), name, owner, note, sold };
+
+if(key === 'stock'){
+entry.buyDate = document.getElementById('s_buyDate').value;
+entry.buyUnits = parseFloat(document.getElementById('s_buyUnits').value)||0;
+entry.buyPrice = parseFloat(document.getElementById('s_buyPrice').value)||0;
+entry.buyTotal = parseFloat(document.getElementById('s_buyTotal').value)||0;
+entry.sellDate = sold ? document.getElementById('s_sellDate').value : '';
+entry.sellUnits = sold ? (parseFloat(document.getElementById('s_sellUnits').value)||0) : 0;
+entry.sellPrice = sold ? (parseFloat(document.getElementById('s_sellPrice').value)||0) : 0;
+entry.sellTotal = sold ? (parseFloat(document.getElementById('s_sellTotal').value)||0) : 0;
+} else if(key === 'gold'){
+entry.buyDate = document.getElementById('g_buyDate').value;
+entry.buyRate = parseFloat(document.getElementById('g_buyRate').value)||0;
+entry.buyWeight = parseFloat(document.getElementById('g_buyWeight').value)||0;
+entry.buyFee = parseFloat(document.getElementById('g_buyFee').value)||0;
+entry.buyTotal = parseFloat(document.getElementById('g_buyTotal').value)||0;
+entry.sellDate = sold ? document.getElementById('g_sellDate').value : '';
+entry.sellRate = sold ? (parseFloat(document.getElementById('g_sellRate').value)||0) : 0;
+entry.sellWeight = sold ? (parseFloat(document.getElementById('g_sellWeight').value)||0) : 0;
+entry.sellTotal = sold ? (parseFloat(document.getElementById('g_sellTotal').value)||0) : 0;
+} else if(key === 'usd'){
+entry.buyDate = document.getElementById('u_buyDate').value;
+entry.buyUsd = parseFloat(document.getElementById('u_buyUsd').value)||0;
+entry.buyFx = parseFloat(document.getElementById('u_buyFx').value)||0;
+entry.buyTotal = parseFloat(document.getElementById('u_buyTwd').value)||0;
+entry.sellDate = sold ? document.getElementById('u_sellDate').value : '';
+entry.sellUsd = sold ? (parseFloat(document.getElementById('u_sellUsd').value)||0) : 0;
+entry.sellFx = sold ? (parseFloat(document.getElementById('u_sellFx').value)||0) : 0;
+entry.sellTotal = sold ? (parseFloat(document.getElementById('u_sellTwd').value)||0) : 0;
+} else if(key === 'policy'){
+entry.buyDate = document.getElementById('p_buyDate').value;
+entry.buyTotal = parseFloat(document.getElementById('p_buyTotal').value)||0;
+entry.sellDate = sold ? document.getElementById('p_sellDate').value : '';
+entry.sellTotal = sold ? (parseFloat(document.getElementById('p_sellTotal').value)||0) : 0;
+} else {
+entry.buyDate = document.getElementById('o_buyDate').value;
+entry.buyTotal = parseFloat(document.getElementById('o_buyTotal').value)||0;
+entry.sellDate = sold ? document.getElementById('o_sellDate').value : '';
+entry.sellTotal = sold ? (parseFloat(document.getElementById('o_sellTotal').value)||0) : 0;
+}
+
+if(editingId){
+CATEGORIES.forEach(c=>{
+DB[c.key] = (DB[c.key]||[]).filter(e=>e.id !== editingId);
+});
+}
+DB[key] = DB[key] || [];
+DB[key].push(entry);
+saveDB();
+
+closeEntryModal();
+renderHome();
+// refresh whichever screen is currently visible
+if(key === 'stock' && currentStockName){
+// saved from within a stock detail page — refresh that detail
+renderStockDetail();
+} else if(key === 'stock'){
+// saved from stock list page
+currentCategory = 'stock';
+renderStockList();
+} else if(currentCategory){
+currentCategory = key;
+renderList();
+}
+showToast(editingId ? '已更新紀錄' : '已新增紀錄');
+}
+
+function editEntry(id){
+let found=null, foundKey=null;
+CATEGORIES.forEach(c=>{
+(DB[c.key]||[]).forEach(e=>{ if(e.id===id){found=e; foundKey=c.key;} });
+});
+if(!found) return;
+editingId = id;
+document.getElementById('modalTitle').textContent = '編輯紀錄';
+document.getElementById('f_name').value = found.name||'';
+document.getElementById('f_note').value = found.note||'';
+resetAllFieldsets();
+
+buildCategoryChips(foundKey);
+buildOwnerChips(found.owner || 'me');
+showFieldsetFor(foundKey);
+
+// populate name field(s)
+if(foundKey === 'stock'){
+const names = getStockNames(null);
+const isExisting = names.includes(found.name||'');
+buildStockNameChips(isExisting ? (found.name||'') : '__new__');
+if(!isExisting){
+document.getElementById('f_name_stock').value = found.name||'';
+}
+} else {
+document.getElementById('f_name').value = found.name||'';
+}
+
+const today = new Date().toISOString().slice(0,10);
+if(foundKey === 'stock'){
+document.getElementById('s_buyDate').value = found.buyDate||'';
+document.getElementById('s_buyUnits').value = found.buyUnits||'';
+document.getElementById('s_buyPrice').value = found.buyPrice||'';
+document.getElementById('s_buyTotal').value = found.buyTotal||'';
+document.getElementById('s_sellDate').value = found.sellDate || today;
+document.getElementById('s_sellUnits').value = found.sellUnits||'';
+document.getElementById('s_sellPrice').value = found.sellPrice||'';
+document.getElementById('s_sellTotal').value = found.sellTotal||'';
+} else if(foundKey === 'gold'){
+document.getElementById('g_buyDate').value = found.buyDate||'';
+document.getElementById('g_buyRate').value = found.buyRate||'';
+document.getElementById('g_buyWeight').value = found.buyWeight||'';
+document.getElementById('g_buyFee').value = found.buyFee||'';
+document.getElementById('g_buyTotal').value = found.buyTotal||'';
+document.getElementById('g_sellDate').value = found.sellDate || today;
+document.getElementById('g_sellRate').value = found.sellRate||'';
+document.getElementById('g_sellWeight').value = found.sellWeight||'';
+document.getElementById('g_sellTotal').value = found.sellTotal||'';
+} else if(foundKey === 'usd'){
+document.getElementById('u_buyDate').value = found.buyDate||'';
+document.getElementById('u_buyUsd').value = found.buyUsd||'';
+document.getElementById('u_buyFx').value = found.buyFx||'';
+document.getElementById('u_buyTwd').value = found.buyTotal||'';
+document.getElementById('u_sellDate').value = found.sellDate || today;
+document.getElementById('u_sellUsd').value = found.sellUsd||'';
+document.getElementById('u_sellFx').value = found.sellFx||'';
+document.getElementById('u_sellTwd').value = found.sellTotal||'';
+} else if(foundKey === 'policy'){
+document.getElementById('p_buyDate').value = found.buyDate||'';
+document.getElementById('p_buyTotal').value = found.buyTotal||'';
+document.getElementById('p_sellDate').value = found.sellDate || today;
+document.getElementById('p_sellTotal').value = found.sellTotal||'';
+} else {
+document.getElementById('o_buyDate').value = found.buyDate||'';
+document.getElementById('o_buyTotal').value = found.buyTotal||'';
+document.getElementById('o_sellDate').value = found.sellDate || today;
+document.getElementById('o_sellTotal').value = found.sellTotal||'';
+}
+
+setSoldToggle(foundKey, !!found.sold);
+updatePreview();
+document.getElementById('entryModalOverlay').classList.add('active');
+}
+
+function deleteEntry(id){
+showConfirm('確定要刪除這筆紀錄嗎？', '刪除後無法復原。').then(ok=>{
+if(!ok) return;
+CATEGORIES.forEach(c=>{
+DB[c.key] = (DB[c.key]||[]).filter(e=>e.id!==id);
+});
+saveDB();
+renderHome();
+if(currentStockName){
+// check if any records remain for this stock
+const remaining = (DB.stock||[]).filter(e=>(e.name||'未命名')===currentStockName);
+if(remaining.length === 0){
+// no records left — go back to stock list
+currentStockName = null;
+renderStockList();
+showScreen('list');
+} else {
+renderStockDetail();
+}
+} else if(currentCategory){
+renderList();
+}
+showToast('已刪除');
+});
+}
+
+/* ============================================================
+SCREENS / NAV
+============================================================ */
+function showScreen(name){
+document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+document.getElementById('screen-'+name).classList.add('active');
+
+document.getElementById('nav-home').classList.toggle('active', name==='home');
+document.getElementById('nav-settings').classList.toggle('active', name==='settings');
+
+document.getElementById('fabBtn').style.display = (name==='settings') ? 'none' : 'flex';
+
+if(name==='home'){
+document.getElementById('topbarEyebrow').textContent = '投資與類別';
+document.getElementById('topbarTitle').textContent = '總覽';
+currentCategory = null;
+currentStockName = null;
+renderHome();
+}
+if(name==='settings'){
+document.getElementById('topbarEyebrow').textContent = '投資與類別';
+document.getElementById('topbarTitle').textContent = '設定';
+renderSettings();
+}
+}
+function goHome(){ showScreen('home'); }
+
+/* ============================================================
+SETTINGS / SNAPSHOTS
+============================================================ */
+function renderSettings(){
+const g = grandTotals();
+document.getElementById('snapInvestedPreview').textContent = fmtMoney(g.invested);
+document.getElementById('snapValuePreview').textContent = fmtMoney(g.value);
+if(!document.getElementById('snapMonth').value){
+document.getElementById('snapMonth').value = new Date().toISOString().slice(0,7);
+}
+renderSnapList();
+}
+
+function saveSnapshot(){
+const month = document.getElementById('snapMonth').value;
+if(!month){ showToast('請選擇月份'); return; }
+const g = grandTotals();
+const existingIdx = SNAPSHOTS.findIndex(s=>s.month===month);
+const snap = { month, invested: g.invested, value: g.value };
+if(existingIdx >= 0) SNAPSHOTS[existingIdx] = snap;
+else SNAPSHOTS.push(snap);
+saveSnapshots();
+renderSnapList();
+showToast('已記錄 ' + month + ' 快照');
+}
+
+function renderSnapList(){
+const wrap = document.getElementById('snapList');
+const sorted = [...SNAPSHOTS].sort((a,b)=>b.month.localeCompare(a.month));
+if(sorted.length===0){
+wrap.innerHTML = `<div style="font-size:12.5px; color:var(--ink-soft);">尚無快照紀錄</div>`;
+return;
+}
+wrap.innerHTML = sorted.map(s=>{
+const pl = s.value - s.invested;
+return `<div class="settings-row">
+<div>
+<div class="settings-label">${s.month}</div>
+<div class="settings-sub">投入 ${fmtMoney(s.invested)} → 資產 ${fmtMoney(s.value)}</div>
+</div>
+<div class="mono ${plClass(pl)}" style="font-size:13px; font-weight:600;">${fmtMoney(pl)}</div>
+</div>`;
+}).join('');
+}
+
+function exportData(){
+const payload = { data: DB, snapshots: SNAPSHOTS, exportedAt: new Date().toISOString(), schema:'v5' };
+const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+const url = URL.createObjectURL(blob);
+const a = document.createElement('a');
+a.href = url;
+a.download = 'investment-dashboard-backup-' + new Date().toISOString().slice(0,10) + '.json';
+document.body.appendChild(a);
+a.click();
+document.body.removeChild(a);
+URL.revokeObjectURL(url);
+showToast('已匯出備份檔');
+}
+
+function copySourceCode(){
+const btn = document.getElementById('copyCodeBtn');
+const html = document.documentElement.outerHTML;
+if(navigator.clipboard && navigator.clipboard.writeText){
+navigator.clipboard.writeText(html).then(()=>{
+btn.textContent = '✓ 已複製！';
+setTimeout(()=>{ btn.textContent = '複製程式碼'; }, 2500);
+}).catch(()=> fallbackCopy(html, btn));
+} else {
+fallbackCopy(html, btn);
+}
+}
+function fallbackCopy(text, btn){
+const ta = document.createElement('textarea');
+ta.value = text;
+ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
+document.body.appendChild(ta);
+ta.focus();
+ta.select();
+try{
+document.execCommand('copy');
+btn.textContent = '✓ 已複製！';
+setTimeout(()=>{ btn.textContent = '複製程式碼'; }, 2500);
+}catch(e){
+showToast('複製失敗，請長按程式碼手動複製');
+}
+document.body.removeChild(ta);
+}
+
+function importData(event){
+const file = event.target.files[0];
+event.target.value = '';
+if(!file) return;
+
+const reader = new FileReader();
+reader.onload = function(e){
+let payload;
+try{
+payload = JSON.parse(e.target.result);
+}catch(err){
+showToast('檔案格式錯誤，無法讀取');
+return;
+}
+if(!payload || typeof payload.data !== 'object'){
+showToast('這不是有效的備份檔');
+return;
+}
+const dateStr = payload.exportedAt ? payload.exportedAt.slice(0,10) : '未知日期';
+showConfirm(
+'確定要匯入這份備份嗎？',
+`備份建立於 ${dateStr}。匯入後會「取代」目前 App 裡的所有資料，建議先匯出目前的資料再繼續。`,
+'匯入並取代'
+).then(ok=>{
+if(!ok) return;
+const freshData = {};
+CATEGORIES.forEach(c => freshData[c.key] = Array.isArray(payload.data[c.key]) ? payload.data[c.key] : []);
+DB = freshData;
+SNAPSHOTS = Array.isArray(payload.snapshots) ? payload.snapshots : [];
+saveDB();
+saveSnapshots();
+activeOwnerFilter = null;
+currentCategory = null;
+renderHome();
+renderSettings();
+showScreen('home');
+showToast('已匯入備份資料');
+});
+};
+reader.onerror = function(){
+showToast('讀取檔案失敗，請再試一次');
+};
+reader.readAsText(file);
+}
+
+function clearAllData(){
+showConfirm('確定要清除所有資料嗎？', '所有投資紀錄與每月快照都會被刪除，此動作無法復原。').then(ok=>{
+if(!ok) return;
+CATEGORIES.forEach(c=>DB[c.key]=[]);
+SNAPSHOTS = [];
+saveDB(); saveSnapshots();
+renderHome(); renderSettings();
+showToast('已清除所有資料');
+});
+}
+
+/* ============================================================
+CONFIRM DIALOG
+============================================================ */
+let confirmResolver = null;
+function showConfirm(title, msg, okLabel){
+return new Promise(resolve=>{
+confirmResolver = resolve;
+document.getElementById('confirmTitle').textContent = title;
+document.getElementById('confirmMsg').textContent = msg;
+document.getElementById('confirmOkBtn').textContent = okLabel || '刪除';
+document.getElementById('confirmOverlay').classList.add('active');
+});
+}
+function closeConfirm(result){
+document.getElementById('confirmOverlay').classList.remove('active');
+if(confirmResolver){ confirmResolver(result); confirmResolver = null; }
+}
+
+/* ============================================================
+TOAST / CLOCK
+============================================================ */
+let toastTimer=null;
+function showToast(msg){
+const t = document.getElementById('toast');
+t.textContent = msg;
+t.classList.add('show');
+clearTimeout(toastTimer);
+toastTimer = setTimeout(()=>t.classList.remove('show'), 1800);
+}
+
+function updateClock(){
+const d = new Date();
+const days = ['週日','週一','週二','週三','週四','週五','週六'];
+document.getElementById('topbarDate').textContent =
+`${d.getMonth()+1}/${d.getDate()} ${days[d.getDay()]}`;
+}
+
+/* ============================================================
+INIT
+============================================================ */
+function init(){
+updateClock();
+setInterval(updateClock, 60000);
+bindModalInputs();
+renderHome();
+
+document.getElementById('entryModalOverlay').addEventListener('click', (e)=>{
+if(e.target.id === 'entryModalOverlay') closeEntryModal();
+});
+
+document.getElementById('confirmCancelBtn').addEventListener('click', ()=>closeConfirm(false));
+document.getElementById('confirmOkBtn').addEventListener('click', ()=>closeConfirm(true));
+document.getElementById('confirmOverlay').addEventListener('click', (e)=>{
+if(e.target.id === 'confirmOverlay') closeConfirm(false);
+});
+}
+document.addEventListener('DOMContentLoaded', init);
+</script>
+
+
+</body></html>
