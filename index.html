@@ -419,7 +419,7 @@ border-bottom:1px solid var(--line);
 .topbar-date{font-size:12px; color:var(--ink-soft); font-family:'Roboto Mono',monospace;}
 
 /* ===== Screens ===== */
-.screen{display:none; padding:18px 20px calc(96px + env(safe-area-inset-bottom)); animation:fadeIn .25s ease;}
+.screen{display:none; padding:18px 20px calc(32px + env(safe-area-inset-bottom)); animation:fadeIn .25s ease;}
 .screen.active{display:block;}
 @keyframes fadeIn{from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);}}
 
@@ -602,10 +602,21 @@ text-align:center; padding:50px 20px; color:var(--ink-soft);
 .empty-state .t{font-size:14px; font-weight:600; color:var(--ink); margin-bottom:4px;}
 .empty-state .s{font-size:12.5px; line-height:1.5;}
 
+/* ===== Top nav buttons (replacing old bottom nav) ===== */
+.topnav-btn{
+width:36px; height:36px; border-radius:10px;
+background:var(--card); border:1px solid var(--line);
+display:flex; align-items:center; justify-content:center;
+font-size:17px; cursor:pointer; color:var(--ink-soft);
+flex-shrink:0;
+}
+.topnav-btn:active{background:var(--card-soft);}
+.topnav-btn.active{background:var(--ink); color:#F5EFE4; border-color:var(--ink);}
+
 /* ===== FAB ===== */
 .fab{
 position:fixed; right:max(20px, calc((100vw - 560px)/2 + 20px));
-bottom:calc(92px + env(safe-area-inset-bottom));
+bottom:calc(24px + env(safe-area-inset-bottom));
 width:56px; height:56px; border-radius:18px;
 background:var(--ink); color:#F5EFE4;
 display:flex; align-items:center; justify-content:center;
@@ -613,24 +624,6 @@ font-size:26px; box-shadow:0 10px 24px -8px rgba(74,61,50,0.45);
 border:none; cursor:pointer; z-index:30;
 }
 .fab:active{transform:scale(0.94);}
-
-/* ===== Bottom nav ===== */
-.bottomnav{
-position:fixed; left:0; right:0; bottom:0; z-index:25;
-max-width:560px; margin:0 auto;
-background:rgba(255,255,255,0.95);
-backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
-border-top:1px solid var(--line);
-display:flex;
-padding:8px 6px calc(8px + env(safe-area-inset-bottom));
-}
-.navbtn{
-flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
-background:none; border:none; padding:6px 0; cursor:pointer; color:var(--ink-soft);
-}
-.navbtn .ic{font-size:19px;}
-.navbtn .lb{font-size:10px; font-weight:600;}
-.navbtn.active{color:var(--rust);}
 
 /* ===== Modal (entry form) ===== */
 .modal-overlay{
@@ -733,6 +726,15 @@ white-space:nowrap;
 }
 .toast.show{opacity:1; transform:translateX(-50%) translateY(-6px);}
 
+
+/* ===== Policy tabs ===== */
+.policy-tabs{display:flex; gap:0; margin-bottom:14px; background:var(--card-soft); border-radius:12px; padding:4px;}
+.policy-tab{
+flex:1; padding:9px; border:none; border-radius:9px; background:transparent;
+font-size:13px; font-weight:600; color:var(--ink-soft); cursor:pointer;
+}
+.policy-tab.active{background:var(--card); color:var(--ink); box-shadow:var(--shadow);}
+
 /* ===== Confirm dialog ===== */
 .confirm-overlay{
 position:fixed; inset:0; background:rgba(74,61,50,0.45); z-index:90;
@@ -765,7 +767,11 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div class="topbar-eyebrow" id="topbarEyebrow">投資與類別</div>
 <div class="topbar-title" id="topbarTitle">設定</div>
 </div>
-<div class="topbar-date" id="topbarDate">6/22 週一</div>
+<div style="display:flex; align-items:center; gap:6px;">
+<div class="topbar-date" id="topbarDate">6/23 週二</div>
+<button class="topnav-btn" id="nav-home" onclick="goHome()" title="總覽">⌂</button>
+<button class="topnav-btn active" id="nav-settings" onclick="showScreen('settings')" title="設定">⚙</button>
+</div>
 </div>
 </div>
 
@@ -782,11 +788,11 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 
 <div class="hero">
 <div class="hero-label">💰 目前總資產</div>
-<div class="hero-value mono" id="heroTotalValue">$133,100</div>
+<div class="hero-value mono" id="heroTotalValue">$0</div>
 <div class="hero-sub">
 <div class="hero-sub-item">
 <div class="hero-sub-label">總投入</div>
-<div class="hero-sub-value" id="heroInvested">$133,100</div>
+<div class="hero-sub-value" id="heroInvested">$0</div>
 </div>
 <div class="hero-sub-item">
 <div class="hero-sub-label">總損益</div>
@@ -803,14 +809,11 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div class="card-head">
 <div class="card-title">資產占比</div>
 </div>
-<div class="pie-wrap" id="pieWrap"><svg class="pie-svg" width="120" height="120" viewBox="0 0 120 120">
-<circle cx="60" cy="60" r="52" fill="#B8714A"></circle>
-<circle cx="60" cy="60" r="30" fill="var(--card)"></circle>
-</svg><div class="legend"><div class="legend-row">
-<span class="legend-dot" style="background:#B8714A"></span>
-<span class="legend-name">股票</span>
-<span class="legend-pct">100%</span>
-</div></div></div>
+<div class="pie-wrap" id="pieWrap"><div class="empty-state" style="padding:20px 0;">
+<div class="ico">◌</div>
+<div class="t">還沒有資料</div>
+<div class="s">新增第一筆投資紀錄後<br>這裡會顯示資產占比</div>
+</div></div>
 </div>
 
 <div class="card" style="padding-bottom:8px;">
@@ -821,11 +824,11 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div class="cat-row-icon" style="background:#B8714A22;">📈</div>
 <div class="cat-row-info">
 <div class="cat-row-name">股票</div>
-<div class="cat-row-sub">持有 3 筆</div>
+<div class="cat-row-sub">尚無資料</div>
 </div>
 <div class="cat-row-right">
-<div class="cat-row-value">$133,100</div>
-<div class="cat-row-roi ">0.0%</div>
+<div class="cat-row-value">$0</div>
+<div class="cat-row-roi ">—</div>
 </div>
 </div><div class="cat-row" onclick="openCategory('gold')">
 <div class="cat-row-icon" style="background:#D4AF3722;">🪙</div>
@@ -851,11 +854,11 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div class="cat-row-icon" style="background:#A87F6F22;">🛡️</div>
 <div class="cat-row-info">
 <div class="cat-row-name">保單</div>
-<div class="cat-row-sub">尚無資料</div>
+<div class="cat-row-sub">持有 1 筆</div>
 </div>
 <div class="cat-row-right">
 <div class="cat-row-value">$0</div>
-<div class="cat-row-roi ">—</div>
+<div class="cat-row-roi ">0.0%</div>
 </div>
 </div><div class="cat-row" onclick="openCategory('other')">
 <div class="cat-row-icon" style="background:#9C8B7A22;">✦</div>
@@ -939,6 +942,66 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div id="stockEntryList"></div>
 </div>
 
+
+<!-- ===== POLICY DETAIL SCREEN ===== -->
+<div class="screen" id="screen-policy">
+<div class="back-row">
+<button class="back-btn" onclick="goBackToPolicyList()">‹</button>
+<div class="list-title-wrap">
+<div class="topbar-eyebrow" style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft);font-weight:600;">保單</div>
+<div class="list-title" id="policyDetailTitle">保單名稱</div>
+</div>
+</div>
+
+<div class="summary-card" id="policySummaryCard">
+<div class="summary-row">
+<div class="strip-item">
+<div class="strip-label">已繳次數</div>
+<div class="strip-value" id="policyPaidCount">0</div>
+</div>
+<div class="strip-item">
+<div class="strip-label">剩餘次數</div>
+<div class="strip-value" id="policyRemaining">0</div>
+</div>
+<div class="strip-item">
+<div class="strip-label">已繳總額</div>
+<div class="strip-value" id="policyPaidTotal">$0</div>
+</div>
+<div class="strip-item">
+<div class="strip-label">已收回饋</div>
+<div class="strip-value" id="policyReturnTotal">$0</div>
+</div>
+</div>
+<div class="summary-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);">
+<div class="strip-item">
+<div class="strip-label">目前損益</div>
+<div class="strip-value" id="policyPL">$0</div>
+</div>
+<div class="strip-item">
+<div class="strip-label">每次金額</div>
+<div class="strip-value" id="policyPerPayment">$0</div>
+</div>
+<div class="strip-item">
+<div class="strip-label">繳費頻率</div>
+<div class="strip-value" id="policyFreq">—</div>
+</div>
+<div class="strip-item">
+<div class="strip-label">幣別</div>
+<div class="strip-value" id="policyCurrency">台幣</div>
+</div>
+</div>
+</div>
+
+<!-- Tabs -->
+<div class="policy-tabs">
+<button class="policy-tab active" id="tab-payments" onclick="switchPolicyTab('payments')">繳費紀錄</button>
+<button class="policy-tab" id="tab-returns" onclick="switchPolicyTab('returns')">回饋紀錄</button>
+</div>
+
+<div id="policyPaymentList"></div>
+<div id="policyReturnList" style="display:none;"></div>
+</div>
+
 <!-- ===== SETTINGS SCREEN ===== -->
 <div class="screen active" id="screen-settings">
 <div class="card">
@@ -952,10 +1015,10 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 </div>
 <div class="calc-hint" style="margin-top:0; display:block;">
 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-<span>目前總投入</span><b id="snapInvestedPreview">$133,100</b>
+<span>目前總投入</span><b id="snapInvestedPreview">$0</b>
 </div>
 <div style="display:flex; justify-content:space-between;">
-<span>目前總資產</span><b id="snapValuePreview">$133,100</b>
+<span>目前總資產</span><b id="snapValuePreview">$0</b>
 </div>
 </div>
 <button class="btn btn-primary" style="width:100%;" onclick="saveSnapshot()">記錄這個月快照</button>
@@ -977,7 +1040,7 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div class="settings-row">
 <div>
 <div class="settings-label">匯出資料</div>
-<div class="settings-sub">下載備份 JSON 檔到手機</div>
+<div class="settings-sub">PWA模式：跳出分享選單，選「儲存到檔案」可選資料夾｜瀏覽器：下載到「檔案 App → 下載」</div>
 </div>
 <button class="btn btn-secondary" style="padding:9px 16px; flex:none;" onclick="exportData()">匯出</button>
 </div>
@@ -1014,15 +1077,6 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 </div>
 
 <button class="fab" id="fabBtn" onclick="openEntryModal()" style="display: none;">+</button>
-
-<div class="bottomnav">
-<button class="navbtn" id="nav-home" onclick="goHome()">
-<div class="ic">⌂</div><div class="lb">總覽</div>
-</button>
-<button class="navbtn active" id="nav-settings" onclick="showScreen('settings')">
-<div class="ic">⚙</div><div class="lb">設定</div>
-</button>
-</div>
 
 <!-- ===== Entry Modal ===== -->
 <div class="modal-overlay" id="entryModalOverlay">
@@ -1119,8 +1173,8 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <input type="number" inputmode="decimal" class="field-input" id="g_buyRate" placeholder="12500">
 </div>
 <div class="field-group">
-<label class="field-label">兩數</label>
-<input type="number" inputmode="decimal" class="field-input" id="g_buyWeight" placeholder="2">
+<label class="field-label">錢數</label>
+<input type="number" inputmode="decimal" class="field-input" id="g_buyWeight" placeholder="例如 5 錢">
 </div>
 </div>
 <div class="field-group">
@@ -1150,8 +1204,8 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <input type="number" inputmode="decimal" class="field-input" id="g_sellRate" placeholder="13000">
 </div>
 <div class="field-group">
-<label class="field-label">兩數</label>
-<input type="number" inputmode="decimal" class="field-input" id="g_sellWeight" placeholder="2">
+<label class="field-label">錢數</label>
+<input type="number" inputmode="decimal" class="field-input" id="g_sellWeight" placeholder="例如 5 錢">
 </div>
 </div>
 <div class="field-group">
@@ -1213,34 +1267,38 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 
 <!-- ===== POLICY ===== -->
 <div id="fieldset-policy" style="display:none;">
+<div class="field-row">
+<div class="field-group">
+<label class="field-label">幣別</label>
+<select class="field-input field-select" id="p_currency">
+<option value="twd">台幣</option>
+<option value="usd">美金</option>
+</select>
+</div>
+<div class="field-group">
+<label class="field-label">繳費頻率</label>
+<select class="field-input field-select" id="p_freq">
+<option value="monthly">月繳</option>
+<option value="quarterly">季繳</option>
+<option value="yearly">年繳</option>
+</select>
+</div>
+</div>
 <div class="field-group">
 <label class="field-label">投保日期</label>
-<input type="date" class="field-input" id="p_buyDate">
+<input type="date" class="field-input" id="p_startDate">
+</div>
+<div class="field-row">
+<div class="field-group">
+<label class="field-label">每次繳費金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="p_perPayment" placeholder="50000">
 </div>
 <div class="field-group">
-<label class="field-label">投入金額</label>
-<input type="number" inputmode="decimal" class="field-input" id="p_buyTotal" placeholder="120000">
-</div>
-
-<div class="sell-toggle-row">
-<div>
-<div class="sell-toggle-label">已經解約 / 領回了</div>
-<div class="sell-toggle-sub">還沒領回就保持關閉</div>
-</div>
-<div class="toggle-switch" id="p_sellToggle" onclick="toggleSold('policy')"></div>
-</div>
-<div id="p_sellFields" style="display:none;">
-<div class="field-group">
-<label class="field-label">領回日期</label>
-<input type="date" class="field-input" id="p_sellDate">
-</div>
-<div class="field-group">
-<label class="field-label">領回金額</label>
-<input type="number" inputmode="decimal" class="field-input" id="p_sellTotal" placeholder="125000">
+<label class="field-label">總繳次數</label>
+<input type="number" inputmode="decimal" class="field-input" id="p_totalCount" placeholder="6">
 </div>
 </div>
 </div>
-
 <!-- ===== OTHER ===== -->
 <div id="fieldset-other" style="display:none;">
 <div class="field-group">
@@ -1283,6 +1341,30 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div class="sheet-actions">
 <button class="btn btn-secondary" onclick="closeEntryModal()">取消</button>
 <button class="btn btn-primary" onclick="saveEntry()">儲存</button>
+</div>
+</div>
+</div>
+
+<!-- ===== Policy Record Modal (payment or return) ===== -->
+<div class="modal-overlay" id="policyRecordOverlay">
+<div class="modal-sheet">
+<div class="sheet-handle"></div>
+<div class="sheet-title" id="policyRecordTitle">新增繳費紀錄</div>
+<div class="field-group">
+<label class="field-label">日期</label>
+<input type="date" class="field-input" id="policyRecordDate">
+</div>
+<div class="field-group">
+<label class="field-label" id="policyRecordAmountLabel">繳費金額</label>
+<input type="number" inputmode="decimal" class="field-input" id="policyRecordAmount" placeholder="50000">
+</div>
+<div class="field-group">
+<label class="field-label" id="policyRecordNoteLabel">備註（選填）</label>
+<input class="field-input" id="policyRecordNote" placeholder="">
+</div>
+<div class="sheet-actions">
+<button class="btn btn-secondary" onclick="closePolicyRecordModal()">取消</button>
+<button class="btn btn-primary" onclick="savePolicyRecord()">儲存</button>
 </div>
 </div>
 </div>
@@ -1381,10 +1463,32 @@ CALCULATIONS — only P/L = sellTotal - buyTotal, everything
 else is just a typed reference number
 ============================================================ */
 function entryInvested(e){ return parseFloat(e.buyTotal)||0; }
-function entryValue(e){ return e.sold ? (parseFloat(e.sellTotal)||0) : (parseFloat(e.buyTotal)||0); }
+function entryValue(e){
+if(e.sold) return parseFloat(e.sellTotal)||0;
+// for policies: use surrender value as current value (if filled), else buyTotal
+if(e.annualPremium !== undefined){
+const surrender = parseFloat(e.surrender)||0;
+return surrender > 0 ? surrender : (parseFloat(e.buyTotal)||0);
+}
+return parseFloat(e.buyTotal)||0;
+}
 function entryPL(e){ return entryValue(e) - entryInvested(e); }
 
 function categoryTotals(key, ownerFilter){
+if(key === 'policy'){
+ensurePolicyDB();
+let list = DB.policy || [];
+if(ownerFilter) list = list.filter(e=>(e.owner||'me')===ownerFilter);
+let invested=0, value=0;
+list.forEach(policy=>{
+const st = policyStats(policy);
+invested += st.paidTotal;
+value += st.returnTotal;
+});
+const pl = value - invested;
+const roi = invested===0 ? 0 : pl/invested;
+return {invested, value, pl, roi, count:list.length, realizedPL:0, unrealizedPL:pl};
+}
 let list = DB[key] || [];
 if(ownerFilter) list = list.filter(e => (e.owner||'me') === ownerFilter);
 let invested=0, value=0, realizedPL=0, unrealizedPL=0;
@@ -1552,6 +1656,10 @@ if(key === 'stock'){
 document.getElementById('listTitle').textContent = '股票';
 renderStockList();
 showScreen('list');
+} else if(key === 'policy'){
+document.getElementById('listTitle').textContent = '保單';
+renderPolicyList();
+showScreen('list');
 } else {
 document.getElementById('listTitle').textContent = cat.name;
 renderList();
@@ -1568,10 +1676,10 @@ return e.sold
 },
 gold(e){
 return e.sold
-? [['買進牌價', fmtMoney(parseFloat(e.buyRate)||0)], ['買進兩數', e.buyWeight||0],
+? [['買進牌價', fmtMoney(parseFloat(e.buyRate)||0)], ['買進錢數', e.buyWeight||0],
 ['工錢', fmtMoney(parseFloat(e.buyFee)||0)],
-['賣出牌價', fmtMoney(parseFloat(e.sellRate)||0)], ['賣出兩數', e.sellWeight||0]]
-: [['買進牌價', fmtMoney(parseFloat(e.buyRate)||0)], ['買進兩數', e.buyWeight||0], ['工錢', fmtMoney(parseFloat(e.buyFee)||0)]];
+['賣出牌價', fmtMoney(parseFloat(e.sellRate)||0)], ['賣出錢數', e.sellWeight||0]]
+: [['買進牌價', fmtMoney(parseFloat(e.buyRate)||0)], ['買進錢數', e.buyWeight||0], ['工錢', fmtMoney(parseFloat(e.buyFee)||0)]];
 },
 usd(e){
 return e.sold
@@ -1587,6 +1695,8 @@ other(){ return []; }
 STOCK TWO-LEVEL: list of stock names → individual records
 ============================================================ */
 let currentStockName = null; // which stock is open in screen-stock
+let currentPolicyName = null; // which policy is open in screen-policy
+let currentPolicyTab = 'payments'; // 'payments' or 'returns'
 
 function getStockNames(ownerFilter){
 // returns unique stock names from DB.stock, respecting owner filter
@@ -1751,6 +1861,278 @@ document.getElementById('topbarTitle').textContent = '股票';
 showScreen('list');
 }
 
+/* ============================================================
+POLICY TWO-LEVEL: list of policies → payment + return records
+DB structure for policy:
+Each "entry" in DB.policy is a POLICY META record:
+{ id, name, owner, currency, freq, startDate,
+perPayment, totalCount, note }
+Actual payments stored in DB.policyPayments (keyed by policyId):
+{ id, policyId, date, amount, note }
+Return/interest records in DB.policyReturns:
+{ id, policyId, date, amount, note }
+============================================================ */
+const FREQ_LABELS = { monthly:'月繳', quarterly:'季繳', yearly:'年繳' };
+
+function ensurePolicyDB(){
+if(!DB.policyPayments) DB.policyPayments = [];
+if(!DB.policyReturns) DB.policyReturns = [];
+}
+
+function getPolicyPayments(policyId){
+ensurePolicyDB();
+return (DB.policyPayments||[]).filter(p=>p.policyId===policyId)
+.sort((a,b)=>a.date.localeCompare(b.date));
+}
+
+function getPolicyReturns(policyId){
+ensurePolicyDB();
+return (DB.policyReturns||[]).filter(r=>r.policyId===policyId)
+.sort((a,b)=>a.date.localeCompare(b.date));
+}
+
+function policyStats(policy){
+const payments = getPolicyPayments(policy.id);
+const returns = getPolicyReturns(policy.id);
+const paidCount = payments.length;
+const totalCount = parseInt(policy.totalCount)||0;
+const remaining = Math.max(0, totalCount - paidCount);
+const paidTotal = payments.reduce((s,p)=>s+(parseFloat(p.amount)||0), 0);
+const returnTotal = returns.reduce((s,r)=>s+(parseFloat(r.amount)||0), 0);
+const pl = returnTotal - paidTotal;
+return { paidCount, totalCount, remaining, paidTotal, returnTotal, pl };
+}
+
+function renderPolicyList(){
+const t = categoryTotals('policy', activeOwnerFilter);
+document.getElementById('listInvested').textContent = fmtMoney(t.invested);
+document.getElementById('listValue').textContent = fmtMoney(t.value);
+const plEl = document.getElementById('listPL');
+plEl.textContent = fmtMoney(t.pl);
+plEl.className = 'strip-value ' + plClass(t.pl);
+const roiEl = document.getElementById('listROI');
+roiEl.textContent = fmtPct(t.roi);
+roiEl.className = 'strip-value ' + plClass(t.pl);
+
+let list = DB.policy || [];
+if(activeOwnerFilter) list = list.filter(e=>(e.owner||'me')===activeOwnerFilter);
+const container = document.getElementById('entryList');
+
+if(list.length===0){
+container.innerHTML = `<div class="empty-state">
+<div class="ico">🛡️</div>
+<div class="t">還沒有保單紀錄</div>
+<div class="s">點右下角的「＋」<br>新增第一張保單</div>
+</div>`;
+return;
+}
+
+const rows = list.map(policy=>{
+const st = policyStats(policy);
+const owner = OWNERS.find(o=>o.key===(policy.owner||'me'))||OWNERS[0];
+const freqLabel = FREQ_LABELS[policy.freq]||policy.freq||'—';
+const currLabel = policy.currency==='usd'?'美金':'台幣';
+const progress = st.totalCount>0
+? `已繳 ${st.paidCount} / ${st.totalCount} 次`
+: `已繳 ${st.paidCount} 次`;
+return `<div class="stock-row" onclick="openPolicy('${policy.id}')">
+<div class="stock-row-ticker" style="font-size:10px;">${freqLabel}<br>${currLabel}</div>
+<div class="stock-row-info">
+<div class="stock-row-name">${escapeHtml(policy.name||'未命名')}</div>
+<div class="stock-row-sub">${progress} · ${owner.icon} ${owner.name}</div>
+</div>
+<div class="stock-row-right">
+<div class="stock-row-pl ${plClass(st.pl)}">${fmtMoney(st.paidTotal)}</div>
+<div class="stock-row-roi ${plClass(st.pl)}">${st.returnTotal>0?'回饋 '+fmtMoney(st.returnTotal):'尚無回饋'}</div>
+</div>
+</div>`;
+}).join('');
+container.innerHTML = `<div class="stock-list">${rows}</div>`;
+}
+
+function openPolicy(policyId){
+const policy = (DB.policy||[]).find(p=>p.id===policyId);
+if(!policy) return;
+currentPolicyName = policyId;
+currentPolicyTab = 'payments';
+document.getElementById('policyDetailTitle').textContent = policy.name||'保單';
+document.getElementById('topbarEyebrow').textContent = '保單';
+document.getElementById('topbarTitle').textContent = policy.name||'保單';
+renderPolicyDetail();
+showScreen('policy');
+}
+
+function switchPolicyTab(tab){
+currentPolicyTab = tab;
+document.getElementById('tab-payments').classList.toggle('active', tab==='payments');
+document.getElementById('tab-returns').classList.toggle('active', tab==='returns');
+document.getElementById('policyPaymentList').style.display = tab==='payments'?'block':'none';
+document.getElementById('policyReturnList').style.display = tab==='returns' ?'block':'none';
+}
+
+function renderPolicyDetail(){
+if(!currentPolicyName) return;
+const policy = (DB.policy||[]).find(p=>p.id===currentPolicyName);
+if(!policy) return;
+const st = policyStats(policy);
+
+document.getElementById('policyPaidCount').textContent = st.paidCount + ' 次';
+document.getElementById('policyRemaining').textContent = st.totalCount>0 ? st.remaining + ' 次' : '—';
+document.getElementById('policyPaidTotal').textContent = fmtMoney(st.paidTotal);
+document.getElementById('policyReturnTotal').textContent = fmtMoney(st.returnTotal);
+const plEl = document.getElementById('policyPL');
+plEl.textContent = fmtMoney(st.pl);
+plEl.className = 'strip-value ' + plClass(st.pl);
+document.getElementById('policyPerPayment').textContent = fmtMoney(parseFloat(policy.perPayment)||0);
+document.getElementById('policyFreq').textContent = FREQ_LABELS[policy.freq]||'—';
+document.getElementById('policyCurrency').textContent = policy.currency==='usd'?'美金':'台幣';
+
+// Payment records
+const payments = getPolicyPayments(currentPolicyName);
+const payContainer = document.getElementById('policyPaymentList');
+if(payments.length===0){
+payContainer.innerHTML = `<div class="empty-state" style="padding:30px 0;">
+<div class="ico">💸</div><div class="t">還沒有繳費紀錄</div>
+<div class="s">點「＋」新增繳費日期</div>
+</div>`;
+} else {
+payContainer.innerHTML = payments.map((p,i)=>`<div class="entry-card">
+<div class="entry-top">
+<div>
+<div class="entry-name">第 ${i+1} 次繳費</div>
+<div class="entry-date">${p.date||'—'}</div>
+</div>
+<div class="entry-roi-badge badge-zero">${fmtMoney(parseFloat(p.amount)||0)}</div>
+</div>
+${p.note?`<div style="font-size:11.5px;color:var(--ink-soft);margin-top:6px;">📝 ${escapeHtml(p.note)}</div>`:''}
+<div class="entry-actions">
+<button onclick="editPolicyRecord('payment','${p.id}')">編輯</button>
+<button class="del" onclick="deletePolicyRecord('payment','${p.id}')">刪除</button>
+</div>
+</div>`).join('');
+}
+
+// Return records
+const returns = getPolicyReturns(currentPolicyName);
+const retContainer = document.getElementById('policyReturnList');
+if(returns.length===0){
+retContainer.innerHTML = `<div class="empty-state" style="padding:30px 0;">
+<div class="ico">🎁</div><div class="t">還沒有回饋紀錄</div>
+<div class="s">點「＋」新增利息或回饋</div>
+</div>`;
+} else {
+retContainer.innerHTML = returns.map(r=>`<div class="entry-card">
+<div class="entry-top">
+<div>
+<div class="entry-name">${escapeHtml(r.note||'回饋')}</div>
+<div class="entry-date">${r.date||'—'}</div>
+</div>
+<div class="entry-roi-badge badge-pos">${fmtMoney(parseFloat(r.amount)||0)}</div>
+</div>
+<div class="entry-actions">
+<button onclick="editPolicyRecord('return','${r.id}')">編輯</button>
+<button class="del" onclick="deletePolicyRecord('return','${r.id}')">刪除</button>
+</div>
+</div>`).join('');
+}
+
+switchPolicyTab(currentPolicyTab);
+}
+
+function goBackToPolicyList(){
+currentPolicyName = null;
+document.getElementById('topbarEyebrow').textContent = '類別';
+document.getElementById('topbarTitle').textContent = '保單';
+renderPolicyList();
+showScreen('list');
+}
+
+// ---- policy record modal (payment or return) ----
+let policyRecordMode = null; // 'payment' or 'return'
+let policyRecordEditId = null;
+
+function openPolicyRecordModal(mode){
+policyRecordMode = mode;
+policyRecordEditId = null;
+const isReturn = mode === 'return';
+const policy = (DB.policy||[]).find(p=>p.id===currentPolicyName);
+const perPayment = policy ? (parseFloat(policy.perPayment)||0) : 0;
+
+document.getElementById('policyRecordTitle').textContent = isReturn ? '新增回饋紀錄' : '新增繳費紀錄';
+document.getElementById('policyRecordAmountLabel').textContent = isReturn ? '回饋金額' : '繳費金額';
+document.getElementById('policyRecordNoteLabel').textContent = isReturn ? '回饋說明（例如：利息、紅利）' : '備註（選填）';
+document.getElementById('policyRecordDate').value = new Date().toISOString().slice(0,10);
+document.getElementById('policyRecordAmount').value = isReturn ? '' : (perPayment || '');
+document.getElementById('policyRecordNote').value = '';
+document.getElementById('policyRecordOverlay').classList.add('active');
+}
+
+function closePolicyRecordModal(){
+document.getElementById('policyRecordOverlay').classList.remove('active');
+}
+
+function savePolicyRecord(){
+if(!currentPolicyName) return;
+const date = document.getElementById('policyRecordDate').value;
+const amount = parseFloat(document.getElementById('policyRecordAmount').value)||0;
+const note = document.getElementById('policyRecordNote').value.trim();
+if(!date){ showToast('請選擇日期'); return; }
+ensurePolicyDB();
+
+const record = { id: policyRecordEditId || uid(), policyId: currentPolicyName, date, amount, note };
+
+if(policyRecordMode === 'payment'){
+if(policyRecordEditId){
+DB.policyPayments = DB.policyPayments.map(p=>p.id===policyRecordEditId ? record : p);
+} else {
+DB.policyPayments.push(record);
+}
+} else {
+if(policyRecordEditId){
+DB.policyReturns = DB.policyReturns.map(r=>r.id===policyRecordEditId ? record : r);
+} else {
+DB.policyReturns.push(record);
+}
+}
+saveDB();
+closePolicyRecordModal();
+renderPolicyDetail();
+renderHome();
+showToast(policyRecordEditId ? '已更新' : '已新增');
+}
+
+function editPolicyRecord(mode, id){
+policyRecordMode = mode;
+policyRecordEditId = id;
+ensurePolicyDB();
+const record = mode==='payment'
+? DB.policyPayments.find(p=>p.id===id)
+: DB.policyReturns.find(r=>r.id===id);
+if(!record) return;
+const isReturn = mode==='return';
+document.getElementById('policyRecordTitle').textContent = isReturn ? '編輯回饋紀錄' : '編輯繳費紀錄';
+document.getElementById('policyRecordAmountLabel').textContent = isReturn ? '回饋金額' : '繳費金額';
+document.getElementById('policyRecordNoteLabel').textContent = isReturn ? '回饋說明' : '備註（選填）';
+document.getElementById('policyRecordDate').value = record.date||'';
+document.getElementById('policyRecordAmount').value = record.amount||'';
+document.getElementById('policyRecordNote').value = record.note||'';
+document.getElementById('policyRecordOverlay').classList.add('active');
+}
+
+function deletePolicyRecord(mode, id){
+showConfirm('確定要刪除這筆紀錄嗎？','刪除後無法復原。').then(ok=>{
+if(!ok) return;
+ensurePolicyDB();
+if(mode==='payment') DB.policyPayments = DB.policyPayments.filter(p=>p.id!==id);
+else DB.policyReturns = DB.policyReturns.filter(r=>r.id!==id);
+saveDB();
+renderPolicyDetail();
+renderHome();
+showToast('已刪除');
+});
+}
+
+
 function renderList(){
 if(!currentCategory) return;
 const cat = CATEGORIES.find(c=>c.key===currentCategory);
@@ -1842,6 +2224,11 @@ stock:'標的名稱', gold:'品項名稱', usd:'帳戶 / 用途', policy:'保單
 };
 
 function openEntryModal(){
+// If we're inside a policy detail screen, open the policy record modal instead
+if(currentPolicyName){
+openPolicyRecordModal(currentPolicyTab === 'returns' ? 'return' : 'payment');
+return;
+}
 editingId = null;
 document.getElementById('modalTitle').textContent = '新增投資紀錄';
 document.getElementById('f_name').value = '';
@@ -1895,10 +2282,11 @@ document.getElementById('u_sellUsd').value = '';
 document.getElementById('u_sellFx').value = '';
 document.getElementById('u_sellTwd').value = '';
 
-document.getElementById('p_buyDate').value = today;
-document.getElementById('p_buyTotal').value = '';
-document.getElementById('p_sellDate').value = today;
-document.getElementById('p_sellTotal').value = '';
+document.getElementById('p_startDate').value = today;
+document.getElementById('p_currency').value = 'twd';
+document.getElementById('p_freq').value = 'yearly';
+document.getElementById('p_perPayment').value = '';
+document.getElementById('p_totalCount').value = '';
 
 document.getElementById('o_buyDate').value = today;
 document.getElementById('o_buyTotal').value = '';
@@ -1975,26 +2363,33 @@ return document.getElementById('ownerSelect').value || 'me';
 function toggleSold(catKey){ setSoldToggle(catKey, !soldState[catKey]); }
 function setSoldToggle(catKey, val){
 soldState[catKey] = val;
-const prefix = {stock:'s',gold:'g',usd:'u',policy:'p',other:'o'}[catKey];
-document.getElementById(prefix+'_sellToggle').classList.toggle('on', val);
-document.getElementById(prefix+'_sellFields').style.display = val ? 'block' : 'none';
+// policy uses its own two-level UI, no sell toggle in the entry form
+if(catKey === 'policy') return;
+const prefix = {stock:'s',gold:'g',usd:'u',other:'o'}[catKey];
+if(!prefix) return;
+const toggleEl = document.getElementById(prefix+'_sellToggle');
+const fieldsEl = document.getElementById(prefix+'_sellFields');
+if(toggleEl) toggleEl.classList.toggle('on', val);
+if(fieldsEl) fieldsEl.style.display = val ? 'block' : 'none';
 updatePreview();
 }
 
 function getBuyTotalFieldId(key){
-return {stock:'s_buyTotal', gold:'g_buyTotal', usd:'u_buyTwd', policy:'p_buyTotal', other:'o_buyTotal'}[key];
+return {stock:'s_buyTotal', gold:'g_buyTotal', usd:'u_buyTwd', other:'o_buyTotal'}[key];
 }
 function getSellTotalFieldId(key){
-return {stock:'s_sellTotal', gold:'g_sellTotal', usd:'u_sellTwd', policy:'p_sellTotal', other:'o_sellTotal'}[key];
+return {stock:'s_sellTotal', gold:'g_sellTotal', usd:'u_sellTwd', other:'o_sellTotal'}[key];
 }
 
 function updatePreview(){
 const key = getSelectedCategory();
 const sold = soldState[key];
-const buyTotal = parseFloat(document.getElementById(getBuyTotalFieldId(key)).value)||0;
 const preview = document.getElementById('plPreview');
 const label = document.getElementById('plLabel');
 
+if(key === 'policy') return; // policy uses its own record modal
+
+const buyTotal = parseFloat(document.getElementById(getBuyTotalFieldId(key)).value)||0;
 if(!sold){
 label.textContent = '尚未賣出，暫無損益';
 preview.innerHTML = `<span style="color:var(--ink-soft);">$0 / 0%</span>`;
@@ -2010,11 +2405,12 @@ preview.innerHTML = `<span class="${plClass(pl)}">${fmtMoney(pl)} / ${fmtPct(roi
 function bindModalInputs(){
 const ids = [
 's_buyTotal','s_sellTotal','g_buyTotal','g_sellTotal',
-'u_buyTwd','u_sellTwd','p_buyTotal','p_sellTotal','o_buyTotal','o_sellTotal'
+'u_buyTwd','u_sellTwd','o_buyTotal','o_sellTotal'
 ];
 ids.forEach(id=>{
 document.getElementById(id).addEventListener('input', updatePreview);
 });
+// policy uses its own record modal — no live preview needed here
 }
 
 function saveEntry(){
@@ -2059,10 +2455,14 @@ entry.sellUsd = sold ? (parseFloat(document.getElementById('u_sellUsd').value)||
 entry.sellFx = sold ? (parseFloat(document.getElementById('u_sellFx').value)||0) : 0;
 entry.sellTotal = sold ? (parseFloat(document.getElementById('u_sellTwd').value)||0) : 0;
 } else if(key === 'policy'){
-entry.buyDate = document.getElementById('p_buyDate').value;
-entry.buyTotal = parseFloat(document.getElementById('p_buyTotal').value)||0;
-entry.sellDate = sold ? document.getElementById('p_sellDate').value : '';
-entry.sellTotal = sold ? (parseFloat(document.getElementById('p_sellTotal').value)||0) : 0;
+entry.buyDate = document.getElementById('p_startDate').value;
+entry.currency = document.getElementById('p_currency').value;
+entry.freq = document.getElementById('p_freq').value;
+entry.perPayment = parseFloat(document.getElementById('p_perPayment').value)||0;
+entry.totalCount = parseInt(document.getElementById('p_totalCount').value)||0;
+entry.buyTotal = 0; // computed from payments
+entry.sellTotal = 0;
+entry.sold = false;
 } else {
 entry.buyDate = document.getElementById('o_buyDate').value;
 entry.buyTotal = parseFloat(document.getElementById('o_buyTotal').value)||0;
@@ -2154,10 +2554,11 @@ document.getElementById('u_sellUsd').value = found.sellUsd||'';
 document.getElementById('u_sellFx').value = found.sellFx||'';
 document.getElementById('u_sellTwd').value = found.sellTotal||'';
 } else if(foundKey === 'policy'){
-document.getElementById('p_buyDate').value = found.buyDate||'';
-document.getElementById('p_buyTotal').value = found.buyTotal||'';
-document.getElementById('p_sellDate').value = found.sellDate || today;
-document.getElementById('p_sellTotal').value = found.sellTotal||'';
+document.getElementById('p_startDate').value = found.buyDate||found.startDate||'';
+document.getElementById('p_currency').value = found.currency||'twd';
+document.getElementById('p_freq').value = found.freq||'yearly';
+document.getElementById('p_perPayment').value = found.perPayment||'';
+document.getElementById('p_totalCount').value = found.totalCount||'';
 } else {
 document.getElementById('o_buyDate').value = found.buyDate||'';
 document.getElementById('o_buyTotal').value = found.buyTotal||'';
@@ -2173,9 +2574,18 @@ document.getElementById('entryModalOverlay').classList.add('active');
 function deleteEntry(id){
 showConfirm('確定要刪除這筆紀錄嗎？', '刪除後無法復原。').then(ok=>{
 if(!ok) return;
+// find which category this belongs to
+let deletedCat = null;
 CATEGORIES.forEach(c=>{
+if((DB[c.key]||[]).find(e=>e.id===id)) deletedCat = c.key;
 DB[c.key] = (DB[c.key]||[]).filter(e=>e.id!==id);
 });
+// if policy deleted, also remove its payment/return records
+if(deletedCat === 'policy'){
+ensurePolicyDB();
+DB.policyPayments = DB.policyPayments.filter(p=>p.policyId!==id);
+DB.policyReturns = DB.policyReturns.filter(r=>r.policyId!==id);
+}
 saveDB();
 renderHome();
 if(currentStockName){
@@ -2205,7 +2615,6 @@ document.getElementById('screen-'+name).classList.add('active');
 
 document.getElementById('nav-home').classList.toggle('active', name==='home');
 document.getElementById('nav-settings').classList.toggle('active', name==='settings');
-
 document.getElementById('fabBtn').style.display = (name==='settings') ? 'none' : 'flex';
 
 if(name==='home'){
@@ -2213,6 +2622,7 @@ document.getElementById('topbarEyebrow').textContent = '投資與類別';
 document.getElementById('topbarTitle').textContent = '總覽';
 currentCategory = null;
 currentStockName = null;
+currentPolicyName = null;
 renderHome();
 }
 if(name==='settings'){
@@ -2269,17 +2679,43 @@ return `<div class="settings-row">
 }
 
 function exportData(){
-const payload = { data: DB, snapshots: SNAPSHOTS, exportedAt: new Date().toISOString(), schema:'v5' };
-const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+ensurePolicyDB();
+const payload = { data: DB, snapshots: SNAPSHOTS, exportedAt: new Date().toISOString(), schema:'v8' };
+const json = JSON.stringify(payload, null, 2);
+const filename = 'investment-backup-' + new Date().toISOString().slice(0,10) + '.json';
+const file = new File([json], filename, { type: 'application/json' });
+
+// iOS PWA: navigator.share → 跳出分享選單 → 選「儲存到檔案」可選資料夾
+if(navigator.share && navigator.canShare && navigator.canShare({ files: [file] })){
+navigator.share({
+title: '投資備份',
+files: [file]
+}).catch(err=>{
+if(err.name !== 'AbortError') exportFallback(json, filename);
+});
+return;
+}
+
+// Safari 瀏覽器（非 PWA）或 Android：用 <a download>
+exportFallback(json, filename);
+}
+
+function exportFallback(json, filename){
+const blob = new Blob([json], { type: 'application/json' });
 const url = URL.createObjectURL(blob);
 const a = document.createElement('a');
 a.href = url;
-a.download = 'investment-dashboard-backup-' + new Date().toISOString().slice(0,10) + '.json';
+a.download = filename;
 document.body.appendChild(a);
 a.click();
 document.body.removeChild(a);
-URL.revokeObjectURL(url);
-showToast('已匯出備份檔');
+setTimeout(()=> URL.revokeObjectURL(url), 1000);
+// After download, show where it went
+showConfirm(
+'備份完成',
+'檔案已下載。\n\n📱 iPhone：打開「檔案 App」→「最近項目」或「下載」資料夾就能找到。\n\n如果你是用「加到主畫面」的 PWA 模式開啟，下次按匯出時會直接讓你選儲存位置。',
+'好的'
+).then(()=>{});
 }
 
 function copySourceCode(){
@@ -2338,6 +2774,8 @@ showConfirm(
 if(!ok) return;
 const freshData = {};
 CATEGORIES.forEach(c => freshData[c.key] = Array.isArray(payload.data[c.key]) ? payload.data[c.key] : []);
+freshData.policyPayments = Array.isArray(payload.data.policyPayments) ? payload.data.policyPayments : [];
+freshData.policyReturns = Array.isArray(payload.data.policyReturns) ? payload.data.policyReturns : [];
 DB = freshData;
 SNAPSHOTS = Array.isArray(payload.snapshots) ? payload.snapshots : [];
 saveDB();
@@ -2415,6 +2853,10 @@ renderHome();
 
 document.getElementById('entryModalOverlay').addEventListener('click', (e)=>{
 if(e.target.id === 'entryModalOverlay') closeEntryModal();
+});
+
+document.getElementById('policyRecordOverlay').addEventListener('click', (e)=>{
+if(e.target.id === 'policyRecordOverlay') closePolicyRecordModal();
 });
 
 document.getElementById('confirmCancelBtn').addEventListener('click', ()=>closeConfirm(false));
