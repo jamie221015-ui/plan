@@ -768,7 +768,7 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div class="topbar-title" id="topbarTitle">設定</div>
 </div>
 <div style="display:flex; align-items:center; gap:6px;">
-<div class="topbar-date" id="topbarDate">6/23 週二</div>
+<div class="topbar-date" id="topbarDate">6/24 週三</div>
 <button class="topnav-btn" id="nav-home" onclick="goHome()" title="總覽">⌂</button>
 <button class="topnav-btn active" id="nav-settings" onclick="showScreen('settings')" title="設定">⚙</button>
 </div>
@@ -778,29 +778,29 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <!-- ===== HOME SCREEN ===== -->
 <div class="screen" id="screen-home">
 
-<div class="owner-filter" id="ownerFilter"><div class="owner-chip " onclick="setOwnerFilter(null)">
+<div class="owner-filter" id="ownerFilter"><div class="owner-chip active" onclick="setOwnerFilter(null)">
 <div class="oc-icon">✦</div><div class="oc-label">全部</div>
 </div><div class="owner-chip " onclick="setOwnerFilter('me')">
 <div class="oc-icon">🐻</div><div class="oc-label">我的資產</div>
-</div><div class="owner-chip active" onclick="setOwnerFilter('we')">
+</div><div class="owner-chip " onclick="setOwnerFilter('we')">
 <div class="oc-icon">👫</div><div class="oc-label">共同資產</div>
 </div></div>
 
 <div class="hero">
 <div class="hero-label">💰 目前總資產</div>
-<div class="hero-value mono" id="heroTotalValue">$0</div>
+<div class="hero-value mono" id="heroTotalValue">$1,100</div>
 <div class="hero-sub">
 <div class="hero-sub-item">
 <div class="hero-sub-label">總投入</div>
-<div class="hero-sub-value" id="heroInvested">$0</div>
+<div class="hero-sub-value" id="heroInvested">$400</div>
 </div>
 <div class="hero-sub-item">
 <div class="hero-sub-label">總損益</div>
-<div class="hero-sub-value " id="heroPL">$0</div>
+<div class="hero-sub-value pos" id="heroPL">$700</div>
 </div>
 <div class="hero-sub-item">
 <div class="hero-sub-label">總報酬率</div>
-<div class="hero-sub-value " id="heroROI">0.0%</div>
+<div class="hero-sub-value pos" id="heroROI">+175.0%</div>
 </div>
 </div>
 </div>
@@ -809,11 +809,14 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div class="card-head">
 <div class="card-title">資產占比</div>
 </div>
-<div class="pie-wrap" id="pieWrap"><div class="empty-state" style="padding:20px 0;">
-<div class="ico">◌</div>
-<div class="t">還沒有資料</div>
-<div class="s">新增第一筆投資紀錄後<br>這裡會顯示資產占比</div>
-</div></div>
+<div class="pie-wrap" id="pieWrap"><svg class="pie-svg" width="120" height="120" viewBox="0 0 120 120">
+<circle cx="60" cy="60" r="52" fill="#B8714A"></circle>
+<circle cx="60" cy="60" r="30" fill="var(--card)"></circle>
+</svg><div class="legend"><div class="legend-row">
+<span class="legend-dot" style="background:#B8714A"></span>
+<span class="legend-name">股票</span>
+<span class="legend-pct">100%</span>
+</div></div></div>
 </div>
 
 <div class="card" style="padding-bottom:8px;">
@@ -824,11 +827,11 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div class="cat-row-icon" style="background:#B8714A22;">📈</div>
 <div class="cat-row-info">
 <div class="cat-row-name">股票</div>
-<div class="cat-row-sub">尚無資料</div>
+<div class="cat-row-sub">持有 0 筆 · 已賣出 2 筆</div>
 </div>
 <div class="cat-row-right">
-<div class="cat-row-value">$0</div>
-<div class="cat-row-roi ">—</div>
+<div class="cat-row-value">$1,100</div>
+<div class="cat-row-roi pos">+450.0%</div>
 </div>
 </div><div class="cat-row" onclick="openCategory('gold')">
 <div class="cat-row-icon" style="background:#D4AF3722;">🪙</div>
@@ -840,20 +843,20 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div class="cat-row-value">$0</div>
 <div class="cat-row-roi ">—</div>
 </div>
-</div><div class="cat-row" onclick="openCategory('usd')">
-<div class="cat-row-icon" style="background:#6FA88A22;">💴</div>
-<div class="cat-row-info">
-<div class="cat-row-name">美金存款</div>
-<div class="cat-row-sub">尚無資料</div>
-</div>
-<div class="cat-row-right">
-<div class="cat-row-value">$0</div>
-<div class="cat-row-roi ">—</div>
-</div>
 </div><div class="cat-row" onclick="openCategory('policy')">
 <div class="cat-row-icon" style="background:#A87F6F22;">🛡️</div>
 <div class="cat-row-info">
 <div class="cat-row-name">保單</div>
+<div class="cat-row-sub">持有 1 筆</div>
+</div>
+<div class="cat-row-right">
+<div class="cat-row-value">$0</div>
+<div class="cat-row-roi neg">-100.0%</div>
+</div>
+</div><div class="cat-row" onclick="openCategory('usd')">
+<div class="cat-row-icon" style="background:#6FA88A22;">💴</div>
+<div class="cat-row-info">
+<div class="cat-row-name">美金存款</div>
 <div class="cat-row-sub">尚無資料</div>
 </div>
 <div class="cat-row-right">
@@ -880,7 +883,7 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div class="back-row">
 <button class="back-btn" onclick="goHome()">‹</button>
 <div class="list-title-wrap">
-<div class="list-title" id="listTitle">保單</div>
+<div class="list-title" id="listTitle">股票</div>
 </div>
 </div>
 
@@ -896,20 +899,16 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 </div>
 <div class="strip-item">
 <div class="strip-label">損益</div>
-<div class="strip-value " id="listPL">$0</div>
+<div class="strip-value" id="listPL">$0</div>
 </div>
 <div class="strip-item">
 <div class="strip-label">報酬率</div>
-<div class="strip-value " id="listROI">0.0%</div>
+<div class="strip-value" id="listROI">0%</div>
 </div>
 </div>
 </div>
 
-<div id="entryList"><div class="empty-state">
-<div class="ico">🛡️</div>
-<div class="t">還沒有保單紀錄</div>
-<div class="s">點右下角的「＋」<br>新增第一張保單</div>
-</div></div>
+<div id="entryList"></div>
 </div>
 
 <!-- ===== STOCK DETAIL SCREEN (individual stock records) ===== -->
@@ -953,7 +952,7 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <button class="back-btn" onclick="goBackToPolicyList()">‹</button>
 <div class="list-title-wrap">
 <div class="topbar-eyebrow" style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft);font-weight:600;">保單</div>
-<div class="list-title" id="policyDetailTitle">正在看你</div>
+<div class="list-title" id="policyDetailTitle">保單名稱</div>
 </div>
 </div>
 
@@ -961,15 +960,15 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div class="summary-row">
 <div class="strip-item">
 <div class="strip-label">已繳次數</div>
-<div class="strip-value" id="policyPaidCount">1 次</div>
+<div class="strip-value" id="policyPaidCount">0</div>
 </div>
 <div class="strip-item">
 <div class="strip-label">剩餘次數</div>
-<div class="strip-value" id="policyRemaining">1 次</div>
+<div class="strip-value" id="policyRemaining">0</div>
 </div>
 <div class="strip-item">
 <div class="strip-label">已繳總額</div>
-<div class="strip-value" id="policyPaidTotal">$200</div>
+<div class="strip-value" id="policyPaidTotal">$0</div>
 </div>
 <div class="strip-item">
 <div class="strip-label">已收回饋</div>
@@ -979,15 +978,15 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <div class="summary-row" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line);">
 <div class="strip-item">
 <div class="strip-label">目前損益</div>
-<div class="strip-value neg" id="policyPL">-$200</div>
+<div class="strip-value" id="policyPL">$0</div>
 </div>
 <div class="strip-item">
 <div class="strip-label">每次金額</div>
-<div class="strip-value" id="policyPerPayment">$200</div>
+<div class="strip-value" id="policyPerPayment">$0</div>
 </div>
 <div class="strip-item">
 <div class="strip-label">繳費頻率</div>
-<div class="strip-value" id="policyFreq">年繳</div>
+<div class="strip-value" id="policyFreq">—</div>
 </div>
 <div class="strip-item">
 <div class="strip-label">幣別</div>
@@ -1002,24 +1001,8 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 <button class="policy-tab" id="tab-returns" onclick="switchPolicyTab('returns')">回饋紀錄</button>
 </div>
 
-<div id="policyPaymentList" style="display: block;"><div class="entry-card">
-<div class="entry-top">
-<div>
-<div class="entry-name">第 1 次繳費</div>
-<div class="entry-date">2026-06-23</div>
-</div>
-<div class="entry-roi-badge badge-zero">$200</div>
-</div>
-
-<div class="entry-actions">
-<button onclick="editPolicyRecord('payment','mqqagcf1encer')">編輯</button>
-<button class="del" onclick="deletePolicyRecord('payment','mqqagcf1encer')">刪除</button>
-</div>
-</div></div>
-<div id="policyReturnList" style="display:none;"><div class="empty-state" style="padding:30px 0;">
-<div class="ico">🎁</div><div class="t">還沒有回饋紀錄</div>
-<div class="s">點「＋」新增利息或回饋</div>
-</div></div>
+<div id="policyPaymentList"></div>
+<div id="policyReturnList" style="display:none;"></div>
 </div>
 
 <!-- ===== SETTINGS SCREEN ===== -->
@@ -1035,10 +1018,10 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 </div>
 <div class="calc-hint" style="margin-top:0; display:block;">
 <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-<span>目前總投入</span><b id="snapInvestedPreview">$0</b>
+<span>目前總投入</span><b id="snapInvestedPreview">$400</b>
 </div>
 <div style="display:flex; justify-content:space-between;">
-<span>目前總資產</span><b id="snapValuePreview">$0</b>
+<span>目前總資產</span><b id="snapValuePreview">$1,100</b>
 </div>
 </div>
 <button class="btn btn-primary" style="width:100%;" onclick="saveSnapshot()">記錄這個月快照</button>
@@ -1106,12 +1089,12 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 
 <div class="field-group">
 <label class="field-label">類別</label>
-<select class="field-input field-select" id="categorySelect" onchange="onCategorySelectChange()"><option value="stock">📈 股票</option><option value="gold">🪙 黃金</option><option value="usd">💴 美金存款</option><option value="policy" selected="">🛡️ 保單</option><option value="other">✦ 其他</option></select>
+<select class="field-input field-select" id="categorySelect" onchange="onCategorySelectChange()"></select>
 </div>
 
 <div class="field-group">
 <label class="field-label">這是誰的資產？</label>
-<select class="field-input field-select" id="ownerSelect"><option value="me" selected="">🐻 我的資產</option><option value="we">👫 共同資產</option></select>
+<select class="field-input field-select" id="ownerSelect"></select>
 </div>
 
 <!-- stock name: select existing or type new -->
@@ -1126,13 +1109,13 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 </div>
 </div>
 
-<div class="field-group" id="genericNameGroup" style="display: block;">
-<label class="field-label" id="nameFieldLabel">保單名稱</label>
-<input class="field-input" id="f_name" placeholder="例如：南山美利人生">
+<div class="field-group" id="genericNameGroup">
+<label class="field-label" id="nameFieldLabel">名稱</label>
+<input class="field-input" id="f_name" placeholder="例如：台積電">
 </div>
 
 <!-- ===== STOCK ===== -->
-<div id="fieldset-stock" style="display: none;">
+<div id="fieldset-stock">
 <div class="field-group">
 <label class="field-label">買進日期</label>
 <input type="date" class="field-input" id="s_buyDate">
@@ -1286,7 +1269,7 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 </div>
 
 <!-- ===== POLICY ===== -->
-<div id="fieldset-policy" style="display: block;">
+<div id="fieldset-policy" style="display:none;">
 <div class="field-row">
 <div class="field-group">
 <label class="field-label">幣別</label>
@@ -1389,12 +1372,12 @@ flex:1; padding:12px; border-radius:12px; border:none; font-size:13.5px; font-we
 </div>
 </div>
 
-<div class="toast" id="toast">已刪除保單</div>
+<div class="toast" id="toast"></div>
 
 <div class="confirm-overlay" id="confirmOverlay">
 <div class="confirm-box">
-<div class="confirm-title" id="confirmTitle">確定要刪除「正在看你」嗎？</div>
-<div class="confirm-msg" id="confirmMsg">保單本身及所有繳費、回饋紀錄都會一起刪除，無法復原。</div>
+<div class="confirm-title" id="confirmTitle">確定要刪除嗎？</div>
+<div class="confirm-msg" id="confirmMsg">此動作無法復原。</div>
 <div class="confirm-actions">
 <button class="confirm-cancel" id="confirmCancelBtn">取消</button>
 <button class="confirm-ok" id="confirmOkBtn">刪除</button>
@@ -1417,8 +1400,8 @@ of what you typed -- they do not feed any formula.
 const CATEGORIES = [
 { key:'stock', name:'股票', icon:'📈', color:'#B8714A' },
 { key:'gold', name:'黃金', icon:'🪙', color:'#D4AF37' },
-{ key:'usd', name:'美金存款', icon:'💴', color:'#6FA88A' },
 { key:'policy', name:'保單', icon:'🛡️', color:'#A87F6F' },
+{ key:'usd', name:'美金存款', icon:'💴', color:'#6FA88A' },
 { key:'other', name:'其他', icon:'✦', color:'#9C8B7A' },
 ];
 
@@ -1544,6 +1527,15 @@ function fmtMoney(n){
 const rounded = Math.round(n);
 const sign = rounded < 0 ? '-' : '';
 return sign + '$' + Math.abs(rounded).toLocaleString('en-US');
+}
+// for prices like stock buy/sell price — preserve decimals
+function fmtPrice(n){
+const num = parseFloat(n)||0;
+const sign = num < 0 ? '-' : '';
+const abs = Math.abs(num);
+// show up to 2 decimal places, strip trailing zeros
+const str = abs % 1 === 0 ? abs.toLocaleString('en-US') : abs.toFixed(2).replace(/\.?0+$/, '');
+return sign + '$' + str;
 }
 function fmtPct(n){
 const pct = (n*100);
@@ -1696,10 +1688,10 @@ return e.sold
 },
 gold(e){
 return e.sold
-? [['買進牌價', fmtMoney(parseFloat(e.buyRate)||0)], ['買進錢數', e.buyWeight||0],
+? [['買進牌價', fmtPrice(e.buyRate)], ['買進錢數', e.buyWeight||0],
 ['工錢', fmtMoney(parseFloat(e.buyFee)||0)],
-['賣出牌價', fmtMoney(parseFloat(e.sellRate)||0)], ['賣出錢數', e.sellWeight||0]]
-: [['買進牌價', fmtMoney(parseFloat(e.buyRate)||0)], ['買進錢數', e.buyWeight||0], ['工錢', fmtMoney(parseFloat(e.buyFee)||0)]];
+['賣出牌價', fmtPrice(e.sellRate)], ['賣出錢數', e.sellWeight||0]]
+: [['買進牌價', fmtPrice(e.buyRate)], ['買進錢數', e.buyWeight||0], ['工錢', fmtMoney(parseFloat(e.buyFee)||0)]];
 },
 usd(e){
 return e.sold
@@ -1772,8 +1764,8 @@ return `<div class="stock-row" onclick="openStock('${escapeHtml(name).replace(/'
 <div class="stock-row-sub">${sub}</div>
 </div>
 <div class="stock-row-right">
-<div class="stock-row-pl ${plClass(st.pl)}">${fmtMoney(st.pl)}</div>
-<div class="stock-row-roi ${plClass(st.pl)}">${fmtPct(st.roi)}</div>
+<div class="stock-row-pl">${fmtMoney(st.invested)}</div>
+<div class="stock-row-roi ${plClass(st.pl)}">${st.pl !== 0 ? fmtMoney(st.pl) : '持有中'}</div>
 </div>
 </div>`;
 }).join('');
@@ -1849,7 +1841,7 @@ return `<div class="entry-card">
 </div>
 <div class="entry-field">
 <div class="entry-field-label">買進成交價</div>
-<div class="entry-field-value">${fmtMoney(parseFloat(e.buyPrice)||0)}</div>
+<div class="entry-field-value">${fmtPrice(e.buyPrice)}</div>
 </div>
 ${e.sold?`
 <div class="entry-field">
@@ -1858,7 +1850,7 @@ ${e.sold?`
 </div>
 <div class="entry-field">
 <div class="entry-field-label">賣出成交價</div>
-<div class="entry-field-value">${fmtMoney(parseFloat(e.sellPrice)||0)}</div>
+<div class="entry-field-value">${fmtPrice(e.sellPrice)}</div>
 </div>`:''}
 <div class="entry-field full">
 <div class="entry-field-label">${e.sold?'已賺 / 賠多少':'尚未實現損益'}</div>
